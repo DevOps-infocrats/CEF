@@ -1,0 +1,31 @@
+:root {
+  /* Design Tokens for Indigo Studio Glassmorphism Theme */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Outfit', sans-serif;
+
+  /* Glass Surface Tokens - Indigo Studio Theme */
+  --glass-bg: rgba(255, 255, 255, 0.90);
+  --glass-bg-subtle: rgba(255, 255, 255, 0.70);
+  --glass-bg-card: #FFFFFF;
+  --glass-border: #C7D2FE;
+  --glass-border-highlight: #818CF8;
+  --glass-border-subtle: #E2E8F0;
+  --glass-shadow: 0 10px 30px -5px rgba(79, 70, 229, 0.08), 0 4px 12px -2px rgba(15, 23, 42, 0.05);
+  --glass-shadow-hover: 0 20px 35px -5px rgba(79, 70, 229, 0.16), 0 8px 16px -2px rgba(15, 23, 42, 0.06);
+  --glass-blur: 16px;
+
+  /* Typography & Accents - Indigo Studio Theme */
+  --text-main: #111827;
+  --text-secondary: #64748B;
+  --text-muted: #94A3B8;
+  --color-primary: #4F46E5;
+  --color-primary-dark: #3730A3;
+  --color-primary-hover: #4338CA;
+  --color-primary-light: #EEF2FF;
+  --color-primary-border: #C7D2FE;
+  --color-primary-glow: rgba(79, 70, 229, 0.2);
+  --color-accent: #6366F1;
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+  --color-error: #DC2626;
+}

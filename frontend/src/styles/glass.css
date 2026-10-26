@@ -1,0 +1,54 @@
+/* Crisp White & Indigo Studio Glass Surface Effects */
+
+.glass-panel {
+  background: var(--glass-bg-card);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: 1.25rem;
+}
+
+.glass-panel-subtle {
+  background: var(--glass-bg-subtle);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border-subtle);
+  border-radius: 1rem;
+}
+
+.glass-panel-interactive {
+  background: var(--glass-bg-card);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: 1.25rem;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-panel-interactive:hover {
+  border-color: var(--glass-border-highlight);
+  transform: translateY(-2px);
+  box-shadow: var(--glass-shadow-hover);
+}
+
+/* Fallback for browsers lacking backdrop-filter */
+@supports not ((-webkit-backdrop-filter: none) or (backdrop-filter: none)) {
+  .glass-panel,
+  .glass-panel-subtle,
+  .glass-panel-interactive {
+    background: #ffffff !important;
+  }
+}
+
+/* Clean, Elegant Indigo Studio Mesh Background */
+.bg-mesh-gradient {
+  background-color: #F8FAFC;
+  background-image: 
+    radial-gradient(at 10% 15%, rgba(79, 70, 229, 0.07) 0px, transparent 55%),
+    radial-gradient(at 90% 10%, rgba(99, 102, 241, 0.06) 0px, transparent 50%),
+    radial-gradient(at 50% 90%, rgba(55, 48, 163, 0.05) 0px, transparent 55%),
+    radial-gradient(at 85% 85%, rgba(199, 210, 254, 0.12) 0px, transparent 50%);
+  background-attachment: fixed;
+}
