@@ -186,9 +186,9 @@ export const InteractiveOfferLetter: React.FC<InteractiveOfferLetterProps> = ({
   const candName = offerFields.candidate_full_name || 'Setu Jat';
   const candMobile = offerFields.candidate_mobile || '9571024426';
   const approvedRole = offerFields.approved_role_name || 'HDD - Tracker';
-  const approvedLoc = offerFields.approved_location || 'Behrunda 2 Rajasthan';
+  const approvedLoc = offerFields.approved_location || 'Rajasthan, Ajmer';
   const joiningDate = offerFields.joining_date || '01/10/2026';
-  const refNum = offerFields.reference_number || 'FFPL/RAJ/2026-27/10/00035';
+  const refNum = offerFields.reference_number || 'FFPL/RAJ/2026-26/10/000100';
   const curDate = offerFields.current_date || '20th Oct, 2026';
 
   const defaultFooter =
@@ -324,8 +324,9 @@ export const InteractiveOfferLetter: React.FC<InteractiveOfferLetterProps> = ({
           <p className="text-justify leading-relaxed">
             <ClickToEditText
               value={
-                content.p10 ||
-                `You will be happy to know that you have been appointed as a ${approvedRole} in our Organization. Presently you will be posted in ${approvedLoc} your services may be transferred to any location within India subject to business requirements. Your remunerations will be as per Annexure- II.`
+                content.p10 && !content.p10.includes('Behrunda 2 Rajasthan')
+                  ? content.p10
+                  : `You will be happy to know that you have been appointed as a ${approvedRole} in our Organization. Presently you will be posted in ${approvedLoc} your services may be transferred to any location within India subject to business requirements. Your remunerations will be as per Annexure- II.`
               }
               onSave={(val) => onTextChange('p10', val)}
               multiline

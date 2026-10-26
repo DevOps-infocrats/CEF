@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import shutil
 import smtplib
@@ -595,6 +596,51 @@ class LetterGenerationService:
         }
 
     @staticmethod
+    def build_approved_location(app: CandidateApplication) -> str:
+        """Format candidate deployment location as Circle, District, Block (e.g. 'Rajasthan, Ajmer, Block Arain')."""
+        loc_parts = []
+        circle = (app.circle or "").strip()
+        if circle:
+            loc_parts.append(circle)
+        if app.district and app.district.strip():
+            loc_parts.append(app.district.strip())
+        if app.block and app.block.strip():
+            b_val = app.block.strip()
+            loc_parts.append(b_val if "block" in b_val.lower() else f"Block {b_val}")
+
+        if not loc_parts and app.current_state:
+            loc_parts.append(app.current_state.strip())
+
+        return ", ".join(loc_parts) if loc_parts else (app.circle or app.current_state or "India")
+
+    @staticmethod
+    def get_next_offer_reference_number(exclude_letter_id: Optional[uuid.UUID] = None) -> str:
+        """Generate sequential offer letter reference number starting from 000100 (+1 for each release)."""
+        now = datetime.now()
+        all_offers = db.session.execute(
+            select(CandidateLetter).where(CandidateLetter.letter_type == TEMPLATE_TYPE_OFFER)
+        ).scalars().all()
+
+        max_seq = 99  # Starts at 000100
+        for l in all_offers:
+            if exclude_letter_id and l.id == exclude_letter_id:
+                continue
+            if l.field_values and isinstance(l.field_values, dict):
+                ref = str(l.field_values.get("reference_number", "")).strip()
+                match = re.search(r"/(\d{6})$", ref)
+                if match:
+                    try:
+                        num = int(match.group(1))
+                        if num >= 100 and num > max_seq:
+                            max_seq = num
+                    except ValueError:
+                        pass
+
+        next_seq = max_seq + 1
+        formatted_seq = f"{next_seq:06d}"
+        return f"FFPL/RAJ/{now.strftime('%Y-%y')}/{now.strftime('%m')}/{formatted_seq}"
+
+    @staticmethod
     def get_or_create_candidate_letters(
         application_id: uuid.UUID,
         user: User,
@@ -657,16 +703,33 @@ class LetterGenerationService:
             addr_parts.append(f"{app.current_city}, {app.current_state} - {app.current_pincode}")
             candidate_address = ", ".join(p for p in addr_parts if p)
 
-            # Build approved location
-            loc_parts = []
-            if app.district:
-                loc_parts.append(f"District {app.district}")
-            if app.current_state:
-                loc_parts.append(f"State {app.current_state}")
-            approved_location = " ".join(loc_parts) if loc_parts else (app.circle or "India")
+            # Build approved deployment location (Circle, District, Block)
+            approved_location = LetterGenerationService.build_approved_location(app)
 
-            # Reference number
-            ref_num = f"FFPL/RAJ/{datetime.now().strftime('%Y-%y')}/{datetime.now().strftime('%m')}/{app.application_number[-5:]}"
+            # Sequential Reference number (starts at 000100, increments +1 for each offer letter)
+            ref_num = LetterGenerationService.get_next_offer_reference_number(
+                exclude_letter_id=offer_letter.id if offer_letter else None
+            )
+
+            # If existing offer letter has an old reference number format (<100 or hash), upgrade to sequential 000100+
+            if offer_letter and offer_letter.field_values and isinstance(offer_letter.field_values, dict):
+                current_ref = str(offer_letter.field_values.get("reference_number", "")).strip()
+                ref_match = re.search(r"/(\d+)$", current_ref)
+                if not ref_match or int(ref_match.group(1)) < 100:
+                    offer_letter.field_values["reference_number"] = ref_num
+                    db.session.add(offer_letter)
+                cur_loc = str(offer_letter.field_values.get("approved_location", "")).strip()
+                if not cur_loc or cur_loc == "Behrunda 2 Rajasthan" or "District " in cur_loc:
+                    offer_letter.field_values["approved_location"] = approved_location
+                    offer_letter.field_values["location"] = approved_location
+                    db.session.add(offer_letter)
+
+            if loi_letter and loi_letter.field_values and isinstance(loi_letter.field_values, dict):
+                cur_loc = str(loi_letter.field_values.get("approved_location", "")).strip()
+                if not cur_loc or cur_loc == "District Location" or "District " in cur_loc:
+                    loi_letter.field_values["approved_location"] = approved_location
+                    loi_letter.field_values["location"] = approved_location
+                    db.session.add(loi_letter)
 
             # Default fields extracted from DB
             default_fields = {

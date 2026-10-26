@@ -67,7 +67,7 @@ export const InteractiveLetterOfIntent: React.FC<InteractiveLetterOfIntentProps>
   const candEmail = loiFields.candidate_email || loiFields.email || '-';
   const candAadhaar = loiFields.candidate_aadhaar || '-';
   const approvedRole = loiFields.approved_role_name || loiFields.role_applied || 'HDD Operator';
-  const approvedLoc = loiFields.approved_location || 'District Location';
+  const approvedLoc = loiFields.approved_location || 'Rajasthan, Ajmer';
   const joiningDate = loiFields.joining_date || '01/11/2026';
   const curDate = loiFields.current_date || loiFields.date || new Date().toLocaleDateString('en-GB');
   const monthlySalary = loiFields.monthly_salary || '40000';
@@ -222,8 +222,9 @@ export const InteractiveLetterOfIntent: React.FC<InteractiveLetterOfIntentProps>
           <p className="text-justify leading-relaxed">
             <ClickToEditText
               value={
-                content.p_location ||
-                `Your initial place of services shall be ${approvedLoc}. However, considering operational and business requirements, the Company reserves the right to reallocate any other location within in India without adversely affecting your service terms.`
+                content.p_location && !content.p_location.includes('District Location')
+                  ? content.p_location
+                  : `Your initial place of services shall be ${approvedLoc}. However, considering operational and business requirements, the Company reserves the right to reallocate any other location within in India without adversely affecting your service terms.`
               }
               onSave={(val) => onTextChange('p_location', val)}
               multiline
