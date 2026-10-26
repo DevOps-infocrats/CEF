@@ -521,3 +521,160 @@ def test_one_master_template_reused_across_multiple_candidates(client):
     assert master_hash_before == master_hash_after, "Master template was modified during candidate generation!"
 
 
+def test_in_place_editing_persists_to_candidate_docx_and_pdf(client):
+    """Verify that editing text directly in place saves to candidate DOCX/PDF and does not leak or alter master."""
+    import hashlib
+    import os
+    import docx
+    from app.modules.letters.services import LetterTemplateService
+
+    admin = create_user("editor_admin@example.com", "Pass@1234", ["users:manage", "letters:view", "letters:generate", "candidates:approve", "candidates:edit"], role="admin")
+    admin_headers = login(client, "editor_admin@example.com", "Pass@1234")
+
+    # Record master SHA256 before
+    master_tmpl = LetterTemplateService.get_active_template("letter_of_intent")
+    with open(master_tmpl.storage_path, "rb") as f:
+        master_hash_before = hashlib.sha256(f.read()).hexdigest()
+
+    # Create Candidate A
+    uA = create_user("cand_a@test.com", "Pass@1234", role="candidate")
+    appA = create_test_application(uA, status=APPLICATION_STATUS_APPROVED)
+
+    # 1. Generate letters for Candidate A
+    respA = client.get(f"/api/v1/applications/{appA.id}/letters", headers=admin_headers)
+    assert respA.status_code == 200
+    loi_data = respA.json["data"]["letter_of_intent"]
+    assert "content" in loi_data
+    assert "paragraphs" in loi_data["content"]
+
+    # 2. Perform in-place text edits on Candidate A's LOI:
+    # E.g. change appointment role paragraph or custom text
+    custom_text = "SPECIAL CUSTOM CLAUSE: Candidate must report to headquarters on day one."
+    edit_payload = {
+        "field_values": {
+            "joining_date": "15/11/2026",
+            "monthly_salary": "48000",
+        },
+        "text_edits": {
+            "HDD Operator": "Lead HDD Telecom Specialist",
+        },
+        "paragraphs": {
+            "10": f"We are pleased to inform you that Fiber Force Pvt Ltd intends to engage your services as Lead HDD Telecom Specialist. {custom_text}",
+        },
+    }
+    patch_resp = client.patch(
+        f"/api/v1/applications/{appA.id}/letters/letter_of_intent",
+        headers=admin_headers,
+        json=edit_payload,
+    )
+    assert patch_resp.status_code == 200
+    updated_loi = patch_resp.json["data"]
+    assert updated_loi["field_values"]["joining_date"] == "15/11/2026"
+    assert updated_loi["field_values"]["monthly_salary"] == "48000"
+
+    # 3. Verify Candidate A's DOCX on disk contains the exact custom edited text
+    cand_a_letter = CandidateLetter.query.filter_by(application_id=appA.id, letter_type="letter_of_intent").order_by(CandidateLetter.version.desc()).first()
+    assert os.path.exists(cand_a_letter.docx_storage_path)
+    cand_a_doc = docx.Document(cand_a_letter.docx_storage_path)
+    full_doc_text = "\n".join(p.text for p in cand_a_doc.paragraphs)
+    assert custom_text in full_doc_text
+    assert "Lead HDD Telecom Specialist" in full_doc_text
+
+    # 4. Create Candidate B and generate their letter
+    uB = create_user("cand_b@test.com", "Pass@1234", role="candidate")
+    appB = create_test_application(uB, status=APPLICATION_STATUS_APPROVED)
+    appB.full_name = "Candidate B Unique"
+    appB.role_applied = "Fiber Technician"
+    db.session.commit()
+
+    respB = client.get(f"/api/v1/applications/{appB.id}/letters", headers=admin_headers)
+    assert respB.status_code == 200
+    loi_b = respB.json["data"]["letter_of_intent"]
+
+    # 5. Verify Candidate B does NOT contain Candidate A's custom text
+    cand_b_letter = CandidateLetter.query.filter_by(application_id=appB.id, letter_type="letter_of_intent").order_by(CandidateLetter.version.desc()).first()
+    cand_b_doc = docx.Document(cand_b_letter.docx_storage_path)
+    b_doc_text = "\n".join(p.text for p in cand_b_doc.paragraphs)
+    assert custom_text not in b_doc_text, "Candidate A's custom text leaked into Candidate B's letter!"
+
+    # 6. Re-fetch Candidate A: ensure custom edits persisted
+    refetch_a = client.get(f"/api/v1/applications/{appA.id}/letters", headers=admin_headers)
+    assert refetch_a.status_code == 200
+    a_content = refetch_a.json["data"]["letter_of_intent"]["content"]
+    assert custom_text in a_content["paragraphs"].get("10", "")
+
+    # 7. Verify the Master Template file content remains 100% untouched
+    with open(master_tmpl.storage_path, "rb") as f:
+        master_hash_after = hashlib.sha256(f.read()).hexdigest()
+    assert master_hash_before == master_hash_after, "Master template was modified!"
+
+
+def test_offer_letter_in_place_editing_persists_and_isolates(client):
+    """Verify that in-place editing of Offer Letter appointment details & Annexure II table saves to candidate DOCX and does not modify master."""
+    import hashlib
+    import os
+    import docx
+    from app.modules.letters.services import LetterTemplateService
+
+    admin = create_user("offer_editor@example.com", "Pass@1234", ["users:manage", "letters:view", "letters:generate", "candidates:approve", "candidates:edit"], role="admin")
+    admin_headers = login(client, "offer_editor@example.com", "Pass@1234")
+
+    master_offer = LetterTemplateService.get_active_template("offer_letter")
+    with open(master_offer.storage_path, "rb") as f:
+        master_hash_before = hashlib.sha256(f.read()).hexdigest()
+
+    u = create_user("cand_offer@test.com", "Pass@1234", role="candidate")
+    app = create_test_application(u, status=APPLICATION_STATUS_APPROVED)
+
+    # 1. Generate Offer Letter
+    resp = client.get(f"/api/v1/applications/{app.id}/letters", headers=admin_headers)
+    assert resp.status_code == 200
+    offer_data = resp.json["data"]["offer_letter"]
+    assert "content" in offer_data
+    assert "tables" in offer_data["content"]
+    assert len(offer_data["content"]["tables"]) > 0
+
+    # 2. Patch with table cell edits and joining date
+    patch_payload = {
+        "field_values": {
+            "joining_date": "05/12/2026",
+            "monthly_salary": "52000",
+            "reference_number": "FFPL/CUSTOM/REF/99999",
+        },
+        "table_cells": {
+            "0,3,1": "52000",
+            "0,8,1": "31200",
+        },
+        "text_edits": {
+            "HDD Operator": "Senior Project Manager",
+        },
+    }
+    patch_resp = client.patch(
+        f"/api/v1/applications/{app.id}/letters/offer_letter",
+        headers=admin_headers,
+        json=patch_payload,
+    )
+    assert patch_resp.status_code == 200
+    updated = patch_resp.json["data"]
+    assert updated["field_values"]["joining_date"] == "05/12/2026"
+    assert updated["field_values"]["monthly_salary"] == "52000"
+
+    # 3. Verify DOCX on disk
+    letter_obj = CandidateLetter.query.filter_by(application_id=app.id, letter_type="offer_letter").order_by(CandidateLetter.version.desc()).first()
+    assert os.path.exists(letter_obj.docx_storage_path)
+    cand_doc = docx.Document(letter_obj.docx_storage_path)
+    full_text = "\n".join(p.text for p in cand_doc.paragraphs)
+    assert "Senior Project Manager" in full_text
+    assert "FFPL/CUSTOM/REF/99999" in full_text
+
+    # Verify table in DOCX has updated cells
+    tbl = cand_doc.tables[0]
+    assert tbl.rows[3].cells[1].text == "52000"
+    assert tbl.rows[8].cells[1].text == "31200"
+
+    # 4. Verify master template is untouched
+    with open(master_offer.storage_path, "rb") as f:
+        master_hash_after = hashlib.sha256(f.read()).hexdigest()
+    assert master_hash_before == master_hash_after, "Master Offer Letter template was altered!"
+
+

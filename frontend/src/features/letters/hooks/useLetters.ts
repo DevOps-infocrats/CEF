@@ -33,11 +33,26 @@ export const useUpdateCandidateLetter = (appId?: string) => {
       letterType,
       fieldValues,
       revisedFile,
+      textEdits,
+      paragraphs,
+      tableCells,
     }: {
       letterType: 'letter_of_intent' | 'offer_letter';
       fieldValues: Record<string, any>;
       revisedFile?: File;
-    }) => letterService.updateCandidateLetter(appId!, letterType, fieldValues, revisedFile),
+      textEdits?: Record<string, string>;
+      paragraphs?: Record<string, string>;
+      tableCells?: Record<string, string>;
+    }) =>
+      letterService.updateCandidateLetter(
+        appId!,
+        letterType,
+        fieldValues,
+        revisedFile,
+        textEdits,
+        paragraphs,
+        tableCells
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['candidate-letters', appId] });
     },

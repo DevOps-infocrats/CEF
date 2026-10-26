@@ -35,12 +35,18 @@ export const letterService = {
     appId: string,
     letterType: 'letter_of_intent' | 'offer_letter',
     fieldValues: Record<string, any>,
-    revisedFile?: File
+    revisedFile?: File,
+    textEdits?: Record<string, string>,
+    paragraphs?: Record<string, string>,
+    tableCells?: Record<string, string>
   ): Promise<CandidateLetterDto> => {
     if (revisedFile) {
       const formData = new FormData();
       formData.append('file', revisedFile);
       formData.append('field_values', JSON.stringify(fieldValues));
+      if (textEdits) formData.append('text_edits', JSON.stringify(textEdits));
+      if (paragraphs) formData.append('paragraphs', JSON.stringify(paragraphs));
+      if (tableCells) formData.append('table_cells', JSON.stringify(tableCells));
       const res = await apiClient.patch<ApiResponse<CandidateLetterDto>>(
         `/applications/${appId}/letters/${letterType}`,
         formData,
@@ -55,7 +61,12 @@ export const letterService = {
 
     const res = await apiClient.patch<ApiResponse<CandidateLetterDto>>(
       `/applications/${appId}/letters/${letterType}`,
-      { field_values: fieldValues }
+      {
+        field_values: fieldValues,
+        text_edits: textEdits,
+        paragraphs: paragraphs,
+        table_cells: tableCells,
+      }
     );
     return res.data.data;
   },

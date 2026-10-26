@@ -29,6 +29,7 @@ export interface CandidateLetterDto {
   inline_pdf_url?: string;
   page_count?: number;
   field_values: Record<string, any>;
+  content?: Record<string, any>;
   last_edited_at?: string | null;
   sent_at?: string | null;
   email_recipient?: string | null;

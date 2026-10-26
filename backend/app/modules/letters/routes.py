@@ -136,13 +136,16 @@ def get_candidate_letters(app_id: str):
         or AuthorizationEvaluator.has_required_permission(user, "documents:view")
         or AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
         or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or AuthorizationEvaluator.has_required_permission(user, "letters:view")
         or "admin" in user_roles
     )
     if not can_view:
         from app.modules.candidates.models import CandidateApplication
         from app.extensions import db
         app_obj = db.session.get(CandidateApplication, app_uuid)
-        if not app_obj or app_obj.user_id != user.id:
+        if not app_obj:
+            raise NotFoundError("Candidate application record not found.")
+        if app_obj.user_id != user.id:
             raise ForbiddenError("You are not authorized to view letters for this application.")
 
     letters_data = LetterGenerationService.get_or_create_candidate_letters(app_uuid, user)
@@ -167,6 +170,7 @@ def update_candidate_letter(app_id: str, letter_type: str):
         or AuthorizationEvaluator.has_required_permission(user, "candidates:edit")
         or AuthorizationEvaluator.has_required_permission(user, "candidates:write")
         or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or AuthorizationEvaluator.has_required_permission(user, "letters:generate")
         or "admin" in user_roles
     )
     if not can_edit:
@@ -176,11 +180,17 @@ def update_candidate_letter(app_id: str, letter_type: str):
         raise ValidationError(f"Invalid letter type: '{letter_type}'")
 
     field_values = {}
+    text_edits = None
+    paragraphs = None
+    table_cells = None
     uploaded_docx = None
 
     if request.is_json:
         data = request.get_json() or {}
         field_values = data.get("field_values", {})
+        text_edits = data.get("text_edits")
+        paragraphs = data.get("paragraphs")
+        table_cells = data.get("table_cells")
     elif request.form:
         import json
         raw_fields = request.form.get("field_values")
@@ -189,6 +199,24 @@ def update_candidate_letter(app_id: str, letter_type: str):
                 field_values = json.loads(raw_fields)
             except Exception:
                 raise ValidationError("Invalid JSON in 'field_values' form parameter.")
+        raw_text_edits = request.form.get("text_edits")
+        if raw_text_edits:
+            try:
+                text_edits = json.loads(raw_text_edits)
+            except Exception:
+                pass
+        raw_paragraphs = request.form.get("paragraphs")
+        if raw_paragraphs:
+            try:
+                paragraphs = json.loads(raw_paragraphs)
+            except Exception:
+                pass
+        raw_table_cells = request.form.get("table_cells")
+        if raw_table_cells:
+            try:
+                table_cells = json.loads(raw_table_cells)
+            except Exception:
+                pass
         if "file" in request.files:
             uploaded_docx = request.files["file"]
 
@@ -198,6 +226,9 @@ def update_candidate_letter(app_id: str, letter_type: str):
         field_values=field_values,
         uploaded_docx=uploaded_docx,
         user=user,
+        text_edits=text_edits,
+        paragraphs=paragraphs,
+        table_cells=table_cells,
     )
 
     return api_response(
@@ -221,13 +252,16 @@ def download_candidate_letter(app_id: str, letter_type: str):
         or AuthorizationEvaluator.has_required_permission(user, "candidates:read")
         or AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
         or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or AuthorizationEvaluator.has_required_permission(user, "letters:view")
         or "admin" in user_roles
     )
     if not can_download:
         from app.modules.candidates.models import CandidateApplication
         from app.extensions import db
         app_obj = db.session.get(CandidateApplication, app_uuid)
-        if not app_obj or app_obj.user_id != user.id:
+        if not app_obj:
+            raise NotFoundError("Candidate application record not found.")
+        if app_obj.user_id != user.id:
             raise ForbiddenError("You are not authorized to download letters for this application.")
 
     letters_data = LetterGenerationService.get_or_create_candidate_letters(app_uuid, user)

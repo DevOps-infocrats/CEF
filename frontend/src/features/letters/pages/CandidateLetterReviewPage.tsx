@@ -9,6 +9,8 @@ import {
   useUpdateCandidateLetter,
   useSendCandidateLetters,
 } from '../hooks/useLetters';
+import { InteractiveLetterOfIntent, LoiLetterContent } from '../components/InteractiveLetterOfIntent';
+import { InteractiveOfferLetter, OfferLetterContent } from '../components/InteractiveOfferLetter';
 import {
   FileText,
   FileCheck2,
@@ -17,16 +19,15 @@ import {
   Download,
   AlertTriangle,
   CheckCircle2,
-  Calendar,
-  DollarSign,
   ArrowLeft,
   Loader2,
-  Sparkles,
   ChevronLeft,
   ChevronRight,
   Eye,
   Save,
   RotateCw,
+  FileCode,
+  Edit3,
 } from 'lucide-react';
 
 export const CandidateLetterReviewPage: React.FC = () => {
@@ -39,32 +40,49 @@ export const CandidateLetterReviewPage: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'loi' | 'offer'>('loi');
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [viewMode, setViewMode] = useState<'interactive' | 'pdf'>('interactive');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Form states for Letter of Intent
+  // Candidate field values
   const [loiFields, setLoiFields] = useState<Record<string, any>>({});
-  // Form states for Offer Letter
   const [offerFields, setOfferFields] = useState<Record<string, any>>({});
+
+  // Dynamic content & in-place text edits
+  const [loiContent, setLoiContent] = useState<LoiLetterContent>({});
+  const [offerContent, setOfferContent] = useState<OfferLetterContent>({});
+  const [loiTextEdits, setLoiTextEdits] = useState<Record<string, string>>({});
+  const [offerTextEdits, setOfferTextEdits] = useState<Record<string, string>>({});
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
 
   // PDF Preview State
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
-  const [isPdfLoading, setIsPdfLoading] = useState<boolean>(true);
+  const [isPdfLoading, setIsPdfLoading] = useState<boolean>(false);
 
   // Confirmation modal
   const [isSendModalOpen, setIsSendModalOpen] = useState<boolean>(false);
   const [confirmCheckbox, setConfirmCheckbox] = useState<boolean>(false);
   const [sendScope, setSendScope] = useState<'both' | 'letter_of_intent' | 'offer_letter'>('both');
 
-  // Populate form fields from lettersData
+  // Populate state from lettersData
   useEffect(() => {
     if (lettersData) {
-      setLoiFields(lettersData.letter_of_intent?.field_values || {});
-      setOfferFields(lettersData.offer_letter?.field_values || {});
+      const loiF = lettersData.letter_of_intent?.field_values || {};
+      const offerF = lettersData.offer_letter?.field_values || {};
+      setLoiFields(loiF);
+      setOfferFields(offerF);
+
+      // Initialize content from server response
+      const serverLoiContent = lettersData.letter_of_intent?.content?.field_values || {};
+      setLoiContent((prev) => ({ ...serverLoiContent, ...loiF, ...prev }));
+
+      const serverOfferContent = lettersData.offer_letter?.content?.field_values || {};
+      setOfferContent((prev) => ({ ...serverOfferContent, ...offerF, ...prev }));
     }
   }, [lettersData]);
 
-  // Load candidate PDF into Blob URL for inline iframe preview
+  // Load candidate PDF into Blob URL when in PDF view mode
   useEffect(() => {
+    if (viewMode !== 'pdf') return;
     let isCancelled = false;
     const fetchPdfPreview = async () => {
       if (!appId) return;
@@ -81,7 +99,6 @@ export const CandidateLetterReviewPage: React.FC = () => {
             if (prev) URL.revokeObjectURL(prev);
             return url;
           });
-          setCurrentPage(1);
         }
       } catch (err: any) {
         if (!isCancelled) {
@@ -96,21 +113,63 @@ export const CandidateLetterReviewPage: React.FC = () => {
     return () => {
       isCancelled = true;
     };
-  }, [appId, activeTab, lettersData]);
+  }, [appId, activeTab, viewMode, lettersData]);
 
   const application = lettersData?.application;
   const loiLetter = lettersData?.letter_of_intent;
   const offerLetter = lettersData?.offer_letter;
 
-  const currentLetter = activeTab === 'loi' ? loiLetter : offerLetter;
-  const totalPages = currentLetter?.page_count || (activeTab === 'loi' ? 2 : 5);
+  const totalPages = activeTab === 'loi' ? 2 : 5;
 
   // Validation
   const loiJoining = loiFields['joining_date']?.trim();
   const offerJoining = offerFields['joining_date']?.trim();
-  const isJoiningMissing = !loiJoining || !offerJoining;
+  const isJoiningMissing = !loiJoining && !offerJoining;
 
-  const handleSalaryChange = (val: string) => {
+  // Handle in-place text edits on LOI
+  const handleLoiTextChange = (key: string, newText: string) => {
+    setLoiContent((prev) => ({ ...prev, [key]: newText }));
+    setLoiTextEdits((prev) => ({ ...prev, [key]: newText }));
+    setHasUnsavedChanges(true);
+  };
+
+  // Handle in-place field updates on LOI
+  const handleLoiFieldChange = (field: string, value: string) => {
+    setLoiFields((prev) => ({ ...prev, [field]: value }));
+    // Synchronize joining date and candidate name to offer letter
+    if (field === 'joining_date') {
+      setOfferFields((prev) => ({ ...prev, joining_date: value }));
+    }
+    if (field === 'candidate_full_name') {
+      setOfferFields((prev) => ({ ...prev, candidate_full_name: value }));
+    }
+    if (field === 'monthly_salary') {
+      handleSalaryRecalculate(value);
+    }
+    setHasUnsavedChanges(true);
+  };
+
+  // Handle in-place text edits on Offer Letter
+  const handleOfferTextChange = (key: string, newText: string) => {
+    setOfferContent((prev) => ({ ...prev, [key]: newText }));
+    setOfferTextEdits((prev) => ({ ...prev, [key]: newText }));
+    setHasUnsavedChanges(true);
+  };
+
+  // Handle in-place field updates on Offer Letter
+  const handleOfferFieldChange = (field: string, value: string) => {
+    setOfferFields((prev) => ({ ...prev, [field]: value }));
+    if (field === 'joining_date') {
+      setLoiFields((prev) => ({ ...prev, joining_date: value }));
+    }
+    if (field === 'candidate_full_name') {
+      setLoiFields((prev) => ({ ...prev, candidate_full_name: value }));
+    }
+    setHasUnsavedChanges(true);
+  };
+
+  // Salary recalculation
+  const handleSalaryRecalculate = (val: string) => {
     const monthlyNum = parseFloat(val) || 0;
     const basic = Math.round(monthlyNum * 0.6);
     const medical = 45;
@@ -156,34 +215,41 @@ export const CandidateLetterReviewPage: React.FC = () => {
     setOfferFields((prev) => ({ ...prev, ...updated }));
   };
 
-  const handleSaveDraft = (type: 'letter_of_intent' | 'offer_letter') => {
-    const values = type === 'letter_of_intent' ? loiFields : offerFields;
+  // Save changes to candidate document
+  const handleSaveDraft = (type?: 'letter_of_intent' | 'offer_letter') => {
+    const targetType = type || (activeTab === 'loi' ? 'letter_of_intent' : 'offer_letter');
+    const values = targetType === 'letter_of_intent' ? loiFields : offerFields;
+    const textEdits = targetType === 'letter_of_intent' ? loiTextEdits : offerTextEdits;
+
     setFeedback(null);
     updateLetterMutation.mutate(
       {
-        letterType: type,
+        letterType: targetType,
         fieldValues: values,
+        textEdits: textEdits,
       },
       {
         onSuccess: () => {
+          setHasUnsavedChanges(false);
           setFeedback({
             type: 'success',
-            text: `${type === 'letter_of_intent' ? 'Letter of Intent' : 'Offer Letter'} updated and regenerated successfully.`,
+            text: `Changes saved successfully to candidate's ${
+              targetType === 'letter_of_intent' ? 'Letter of Intent' : 'Offer Letter'
+            }. Master template remains pristine.`,
           });
           refetch();
         },
         onError: (err: any) => {
           setFeedback({
             type: 'error',
-            text: err?.response?.data?.message || err?.message || 'Failed to save draft.',
+            text: err?.response?.data?.message || err?.message || 'Failed to save changes.',
           });
         },
       }
     );
   };
 
-
-
+  // Email dispatch
   const handleConfirmSend = () => {
     if (!appId) return;
     setFeedback(null);
@@ -194,7 +260,7 @@ export const CandidateLetterReviewPage: React.FC = () => {
           setIsSendModalOpen(false);
           setFeedback({
             type: 'success',
-            text: `Congratulations! The reviewed PDF letter(s) were successfully emailed to '${data.recipient}'.`,
+            text: `Letters successfully emailed to candidate '${data.recipient}'.`,
           });
           refetch();
         },
@@ -213,7 +279,7 @@ export const CandidateLetterReviewPage: React.FC = () => {
       <div className="min-h-[60vh] flex flex-col items-center justify-center gap-3">
         <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
         <span className="text-xs uppercase tracking-widest text-slate-400 font-mono">
-          Loading Letter Workspace...
+          Loading Candidate Letters...
         </span>
       </div>
     );
@@ -224,22 +290,14 @@ export const CandidateLetterReviewPage: React.FC = () => {
     const errorMessage =
       errorResponse?.message ||
       (error as any)?.message ||
-      (application ? `Candidate application status is '${application.status}'. Letters can only be generated for APPROVED candidates.` : 'Unable to find or load the candidate letter records.');
-
-    const isApprovalError =
-      (error as any)?.response?.status === 400 &&
-      errorMessage.toLowerCase().includes('approved');
+      'Unable to find or load the candidate letter records.';
 
     return (
       <div className="max-w-4xl mx-auto p-6">
         <GlassCard className="p-8 text-center bg-rose-50/60 border-rose-200">
           <AlertTriangle className="w-10 h-10 text-rose-500 mx-auto mb-3" />
-          <h2 className="text-lg font-bold text-slate-900">
-            {isApprovalError ? 'Candidate Not Approved' : 'Unable to Load Letters'}
-          </h2>
-          <p className="text-xs text-slate-600 mt-2 max-w-lg mx-auto">
-            {errorMessage}
-          </p>
+          <h2 className="text-lg font-bold text-slate-900">Unable to Load Letters</h2>
+          <p className="text-xs text-slate-600 mt-2 max-w-lg mx-auto">{errorMessage}</p>
           <div className="mt-5 flex items-center justify-center gap-3">
             <button
               type="button"
@@ -264,8 +322,8 @@ export const CandidateLetterReviewPage: React.FC = () => {
   const isSent = loiLetter?.status === 'SENT' && offerLetter?.status === 'SENT';
 
   return (
-    <div className="max-w-7xl mx-auto space-y-5 pb-16 animate-fade-in">
-      {/* Navigation & Header */}
+    <div className="max-w-6xl mx-auto space-y-4 pb-16 animate-fade-in">
+      {/* Top Header Navigation */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <button
@@ -279,7 +337,7 @@ export const CandidateLetterReviewPage: React.FC = () => {
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-                Candidate Letter Review & Dispatch Workspace
+                Candidate Letter Workspace
               </h1>
               <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
                 Approved Candidate
@@ -292,7 +350,7 @@ export const CandidateLetterReviewPage: React.FC = () => {
               )}
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Original master Word templates remain untouched. Review candidate-specific letters page-by-page before emailing final PDFs.
+              Original master Word templates remain strictly read-only. Click any text directly on the letter to edit in place.
             </p>
           </div>
         </div>
@@ -301,13 +359,15 @@ export const CandidateLetterReviewPage: React.FC = () => {
         <div className="flex items-center gap-2">
           <GlassButton
             type="button"
-            variant="secondary"
-            onClick={() => handleSaveDraft(activeTab === 'loi' ? 'letter_of_intent' : 'offer_letter')}
+            variant={hasUnsavedChanges ? 'primary' : 'secondary'}
+            onClick={() => handleSaveDraft()}
             isLoading={updateLetterMutation.isPending}
-            className="text-xs py-2 px-3.5 flex items-center gap-1.5"
+            className={`text-xs py-2 px-3.5 flex items-center gap-1.5 ${
+              hasUnsavedChanges ? 'bg-amber-600 hover:bg-amber-700 text-white' : ''
+            }`}
           >
-            <Save className="w-3.5 h-3.5 text-slate-500" />
-            <span>Save Draft</span>
+            <Save className="w-3.5 h-3.5" />
+            <span>{hasUnsavedChanges ? 'Save Changes *' : 'Save Draft'}</span>
           </GlassButton>
 
           <GlassButton
@@ -317,7 +377,7 @@ export const CandidateLetterReviewPage: React.FC = () => {
               if (isJoiningMissing) {
                 setFeedback({
                   type: 'error',
-                  text: 'Mandatory field: Joining Date must be entered before letters can be sent.',
+                  text: 'Mandatory: Joining Date must be entered before letters can be emailed. Click on the Start Date line in the letter to specify it.',
                 });
                 return;
               }
@@ -334,8 +394,8 @@ export const CandidateLetterReviewPage: React.FC = () => {
       </div>
 
       {/* Candidate Profile Summary Header Card */}
-      <GlassCard className="bg-white/95 border-slate-200 p-4">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-xs">
+      <GlassCard className="bg-white/95 border-slate-200 p-3.5">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
           <div>
             <span className="text-slate-400 block text-[11px]">Candidate Name</span>
             <span className="font-bold text-slate-900 text-sm">{application.full_name}</span>
@@ -363,11 +423,11 @@ export const CandidateLetterReviewPage: React.FC = () => {
 
       {/* Missing Joining Date Alert Banner */}
       {isJoiningMissing && (
-        <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-3">
+        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-amber-800 leading-relaxed">
-            <span className="font-bold block text-sm mb-0.5">Mandatory Action: Joining Date is Required</span>
-            Please specify the candidate's agreed service start date in the field on the left. The official Letter of Intent and Offer Letter require this mandatory field before email dispatch.
+            <span className="font-bold block text-sm mb-0.5">Mandatory: Joining Date is Required</span>
+            Please click on the <strong>Start Date of Services</strong> line in the preview below and enter the candidate's agreed start date.
           </div>
         </div>
       )}
@@ -375,7 +435,7 @@ export const CandidateLetterReviewPage: React.FC = () => {
       {/* Feedback Alert */}
       {feedback && (
         <div
-          className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all ${
+          className={`p-3 rounded-xl border flex items-start gap-3 transition-all ${
             feedback.type === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
               : 'bg-rose-50 border-rose-200 text-rose-800'
@@ -390,336 +450,252 @@ export const CandidateLetterReviewPage: React.FC = () => {
         </div>
       )}
 
-      {/* Dual Document Workspace Tabs */}
-      <div className="flex items-center gap-4 border-b border-slate-200">
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTab('loi');
-            setCurrentPage(1);
-          }}
-          className={`flex items-center gap-2 pb-3 text-xs font-bold transition-all border-b-2 ${
-            activeTab === 'loi'
-              ? 'border-indigo-600 text-indigo-800'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <FileText className="w-4 h-4" />
-          <span>1. Letter of Intent (LOI)</span>
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600">
-            2 Pages
-          </span>
-          <span
-            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-              loiLetter?.status === 'SENT'
-                ? 'bg-emerald-100 text-emerald-800'
-                : 'bg-indigo-50 text-indigo-700'
+      {/* Document Workspace Tabs */}
+      <div className="flex items-center justify-between border-b border-slate-200 gap-4 flex-wrap">
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('loi');
+              setCurrentPage(1);
+            }}
+            className={`flex items-center gap-2 pb-3 text-xs font-bold transition-all border-b-2 ${
+              activeTab === 'loi'
+                ? 'border-indigo-600 text-indigo-800'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            {loiLetter?.status || 'DRAFT'}
-          </span>
-        </button>
+            <FileText className="w-4 h-4" />
+            <span>1. Letter of Intent (LOI)</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600">
+              2 Pages
+            </span>
+            <span
+              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                loiLetter?.status === 'SENT'
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-indigo-50 text-indigo-700'
+              }`}
+            >
+              {loiLetter?.status || 'DRAFT'}
+            </span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTab('offer');
-            setCurrentPage(1);
-          }}
-          className={`flex items-center gap-2 pb-3 text-xs font-bold transition-all border-b-2 ${
-            activeTab === 'offer'
-              ? 'border-indigo-600 text-indigo-800'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          <FileCheck2 className="w-4 h-4" />
-          <span>2. Appointment & Offer Letter (FFPL)</span>
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600">
-            5 Pages
-          </span>
-          <span
-            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-              offerLetter?.status === 'SENT'
-                ? 'bg-emerald-100 text-emerald-800'
-                : 'bg-indigo-50 text-indigo-700'
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('offer');
+              setCurrentPage(1);
+            }}
+            className={`flex items-center gap-2 pb-3 text-xs font-bold transition-all border-b-2 ${
+              activeTab === 'offer'
+                ? 'border-indigo-600 text-indigo-800'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            {offerLetter?.status || 'DRAFT'}
-          </span>
-        </button>
-      </div>
-
-      {/* Main Workspace Split: Controls vs. Real Multi-Page Preview */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* LEFT COLUMN: Controls & Candidate-Specific Fields */}
-        <div className="lg:col-span-5 space-y-4">
-          <GlassCard className="bg-white/95 border-slate-200 p-5 space-y-4">
-            <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-indigo-600" />
-                  {activeTab === 'loi' ? 'Letter of Intent Parameters' : 'Offer Letter & Salary Structure'}
-                </h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Edits modify only this candidate's working document. The master Word template remains read-only.
-                </p>
-              </div>
-            </div>
-
-            {/* Inputs */}
-            <div className="space-y-3.5">
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">
-                  Joining / Reporting Date <span className="text-rose-600">*</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="e.g. 01/11/2026"
-                    value={activeTab === 'loi' ? (loiFields['joining_date'] || '') : (offerFields['joining_date'] || '')}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setLoiFields((p) => ({ ...p, joining_date: v }));
-                      setOfferFields((p) => ({ ...p, joining_date: v }));
-                    }}
-                    className={`w-full px-3 py-2 text-xs rounded-lg border font-mono ${
-                      isJoiningMissing
-                        ? 'border-amber-400 bg-amber-50/40 text-amber-900 focus:border-amber-600'
-                        : 'border-slate-300 text-slate-900 focus:border-indigo-600'
-                    } focus:outline-none`}
-                  />
-                  <Calendar className="w-4 h-4 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
-                </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">
-                  Synchronized across both the Letter of Intent and Offer Letter.
-                </span>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">
-                  Monthly Compensation (INR) <span className="text-rose-600">*</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={loiFields['monthly_salary'] || '40000'}
-                    onChange={(e) => handleSalaryChange(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 text-slate-900 font-mono focus:border-indigo-600 focus:outline-none"
-                  />
-                  <DollarSign className="w-4 h-4 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
-                </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">
-                  Annual CTC: ₹{(Number(loiFields['monthly_salary'] || 40000) * 12).toLocaleString()}
-                </span>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">
-                  Assigned Work Location
-                </label>
-                <input
-                  type="text"
-                  value={activeTab === 'loi' ? (loiFields['approved_location'] || '') : (offerFields['approved_location'] || '')}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (activeTab === 'loi') setLoiFields((p) => ({ ...p, approved_location: v }));
-                    else setOfferFields((p) => ({ ...p, approved_location: v }));
-                  }}
-                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 text-slate-900 focus:border-indigo-600 focus:outline-none"
-                />
-              </div>
-
-              {activeTab === 'offer' && (
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 block mb-1">
-                    Company Appointment Reference ID
-                  </label>
-                  <input
-                    type="text"
-                    value={offerFields['reference_number'] || ''}
-                    onChange={(e) => setOfferFields((p) => ({ ...p, reference_number: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 text-slate-900 font-mono focus:border-indigo-600 focus:outline-none"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Annexure II Structured Breakdown in Offer Letter Tab */}
-            {activeTab === 'offer' && (
-              <div className="pt-3 border-t border-slate-100">
-                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">
-                  Annexure II Salary Heads
-                </h4>
-                <div className="space-y-1.5 text-xs bg-slate-50 p-3 rounded-lg border border-slate-200/80 max-h-52 overflow-y-auto">
-                  <div className="flex justify-between py-1 border-b border-slate-200">
-                    <span className="font-semibold text-slate-700">Basic (60%)</span>
-                    <span className="font-mono text-slate-900">₹{offerFields['basic_monthly'] || '0'}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-slate-200">
-                    <span className="font-semibold text-slate-700">Advance Bonus</span>
-                    <span className="font-mono text-slate-900">₹{offerFields['bonus_monthly'] || '0'}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-slate-200">
-                    <span className="font-semibold text-slate-700">Advance Gratuity</span>
-                    <span className="font-mono text-slate-900">₹{offerFields['gratuity_monthly'] || '0'}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-slate-200">
-                    <span className="font-semibold text-slate-700">Medical Allowance</span>
-                    <span className="font-mono text-slate-900">₹{offerFields['medical_monthly'] || '45'}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-slate-200">
-                    <span className="font-semibold text-slate-700">Other Allowances</span>
-                    <span className="font-mono text-slate-900">₹{offerFields['other_allowance_monthly'] || '0'}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-slate-200">
-                    <span className="font-semibold text-slate-700">GPA Insurance</span>
-                    <span className="font-mono text-slate-900">-₹45</span>
-                  </div>
-                  <div className="flex justify-between py-1.5 font-bold text-slate-900 bg-indigo-50/70 px-2 rounded">
-                    <span>Net Take Home</span>
-                    <span className="font-mono text-indigo-700">₹{offerFields['take_home_monthly'] || '0'}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-          </GlassCard>
+            <FileCheck2 className="w-4 h-4" />
+            <span>2. Appointment & Offer Letter (FFPL)</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600">
+              5 Pages
+            </span>
+            <span
+              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                offerLetter?.status === 'SENT'
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-indigo-50 text-indigo-700'
+              }`}
+            >
+              {offerLetter?.status || 'DRAFT'}
+            </span>
+          </button>
         </div>
 
-        {/* RIGHT COLUMN: Full Page-by-Page Document Preview */}
-        <div className="lg:col-span-7 space-y-3">
-          <GlassCard className="bg-white/95 border-slate-200 p-4 space-y-3 shadow-md">
-            {/* Document Header & Navigation Toolbar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
-              <div className="flex items-center gap-2">
-                <Eye className="w-4 h-4 text-indigo-600" />
-                <span className="font-bold text-slate-900 text-xs">
-                  {activeTab === 'loi' ? 'Letter of Intent' : 'Appointment & Offer Letter'} Preview
-                </span>
-                <span className="px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 text-indigo-700 rounded border border-indigo-100">
-                  Candidate Master Copy — High-Fidelity Word Layout
-                </span>
-              </div>
+        {/* View Mode Toggle: Interactive Click-to-Edit vs. Native PDF View */}
+        <div className="flex items-center gap-1 pb-2">
+          <div className="bg-slate-100 p-0.5 rounded-lg border border-slate-200 flex items-center text-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode('interactive')}
+              className={`px-2.5 py-1 rounded font-medium flex items-center gap-1.5 transition-colors ${
+                viewMode === 'interactive'
+                  ? 'bg-white text-indigo-700 shadow-xs font-semibold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Interactive (Click to Edit)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('pdf')}
+              className={`px-2.5 py-1 rounded font-medium flex items-center gap-1.5 transition-colors ${
+                viewMode === 'pdf'
+                  ? 'bg-white text-indigo-700 shadow-xs font-semibold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <FileCode className="w-3.5 h-3.5" />
+              <span>Compiled PDF</span>
+            </button>
+          </div>
+        </div>
+      </div>
 
-              {/* Page Controls & Actions */}
-              <div className="flex items-center gap-2">
-                <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200">
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    disabled={currentPage <= 1}
-                    className="p-1 rounded text-slate-600 hover:text-indigo-600 hover:bg-white disabled:opacity-30 disabled:pointer-events-none transition-colors"
-                    title="Previous Page"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <span className="px-2.5 text-xs font-mono font-semibold text-slate-700 select-none">
-                    Page {currentPage} of {totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={currentPage >= totalPages}
-                    className="p-1 rounded text-slate-600 hover:text-indigo-600 hover:bg-white disabled:opacity-30 disabled:pointer-events-none transition-colors"
-                    title="Next Page"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
+      {/* Main Document Preview Container (Center Stage) */}
+      <GlassCard className="bg-slate-50/70 border-slate-200 p-4 space-y-3 shadow-md">
+        {/* Document Header & Navigation Toolbar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+          <div className="flex items-center gap-2">
+            <Eye className="w-4 h-4 text-indigo-600" />
+            <span className="font-bold text-slate-900 text-xs">
+              {activeTab === 'loi' ? 'Letter of Intent' : 'Appointment & Offer Letter'}
+            </span>
+            <span className="px-2 py-0.5 text-[10px] font-semibold bg-emerald-50 text-emerald-700 rounded border border-emerald-200">
+              Click any text on the letter to edit in place
+            </span>
+          </div>
 
-                <button
-                  type="button"
-                  onClick={() => refetch()}
-                  className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:text-indigo-600 hover:bg-slate-50 transition-colors"
-                  title="Reload Preview"
-                >
-                  <RotateCw className="w-3.5 h-3.5" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSaveDraft(activeTab === 'loi' ? 'letter_of_intent' : 'offer_letter')}
-                  disabled={updateLetterMutation.isPending}
-                  className="p-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 transition-colors flex items-center gap-1 text-xs font-semibold"
-                  title={`Save ${activeTab === 'loi' ? 'Letter of Intent' : 'Offer Letter'} Changes`}
-                >
-                  {updateLetterMutation.isPending ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Save className="w-3.5 h-3.5 text-indigo-600" />
-                  )}
-                  <span className="hidden sm:inline">Save</span>
-                </button>
-
-                <a
-                  href={`/api/v1/applications/${appId}/letters/${activeTab === 'loi' ? 'letter_of_intent' : 'offer_letter'}/download?format=pdf`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:text-indigo-600 hover:bg-slate-50 transition-colors flex items-center gap-1 text-xs"
-                  title="Download Reviewed PDF"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">PDF</span>
-                </a>
-              </div>
+          {/* Page Controls & Actions */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center bg-white rounded-lg p-0.5 border border-slate-200 shadow-xs">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="p-1 rounded text-slate-600 hover:text-indigo-600 hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                title="Previous Page"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="px-2.5 text-xs font-mono font-semibold text-slate-700 select-none">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="p-1 rounded text-slate-600 hover:text-indigo-600 hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                title="Next Page"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
 
-            {/* Quick Page Jump Pills */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px]">
-              <span className="text-slate-400 font-medium mr-1">Jump to page:</span>
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map((pNum) => (
-                <button
-                  key={pNum}
-                  type="button"
-                  onClick={() => setCurrentPage(pNum)}
-                  className={`px-2 py-0.5 rounded font-mono font-semibold transition-all ${
-                    currentPage === pNum
-                      ? 'bg-indigo-600 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  Page {pNum}
-                  {activeTab === 'offer' && pNum === 5 && ' (Annexure II)'}
-                  {activeTab === 'offer' && (pNum === 3 || pNum === 4) && ' (Annexure I)'}
-                </button>
-              ))}
-            </div>
-
-            {/* Document Rendering Surface */}
-            <div className="relative w-full min-h-[820px] max-h-[920px] overflow-y-auto bg-slate-100/70 rounded-xl p-2 sm:p-3 border border-slate-200">
-              {isPdfLoading ? (
-                <div className="h-[780px] flex flex-col items-center justify-center gap-3 bg-white/80 rounded-lg">
-                  <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
-                  <span className="text-xs font-medium text-slate-600">
-                    Generating document preview...
-                  </span>
-                </div>
-              ) : pdfBlobUrl ? (
-                <iframe
-                  key={`${pdfBlobUrl}#page=${currentPage}`}
-                  src={`${pdfBlobUrl}#page=${currentPage}&toolbar=0&navpanes=0`}
-                  title="Reviewed Candidate Letter PDF Preview"
-                  className="w-full h-[780px] border-0 bg-white rounded-lg shadow-sm"
-                />
+            <button
+              type="button"
+              onClick={() => handleSaveDraft()}
+              disabled={updateLetterMutation.isPending}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs ${
+                hasUnsavedChanges
+                  ? 'border-amber-400 bg-amber-500 text-white hover:bg-amber-600'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+              title="Save Changes"
+            >
+              {updateLetterMutation.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <div className="h-[780px] flex flex-col items-center justify-center p-6 text-center text-slate-500 text-xs">
-                  <AlertTriangle className="w-8 h-8 text-amber-500 mb-2" />
-                  <span>Unable to render preview inline. Click Download PDF above to view the document.</span>
-                </div>
+                <Save className="w-3.5 h-3.5" />
               )}
-            </div>
+              <span>Save</span>
+            </button>
 
-            <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
-              <span>
-                Format: Microsoft Word master document rendered via native PDF engine preserving exact layout, fonts, margins, stamps, and tables.
-              </span>
-              <span>
-                {activeTab === 'loi' ? '2 of 2 pages rendered' : '5 of 5 pages rendered (including Annexures I & II)'}
-              </span>
-            </div>
-          </GlassCard>
+            <a
+              href={`/api/v1/applications/${appId}/letters/${activeTab === 'loi' ? 'letter_of_intent' : 'offer_letter'}/download?format=pdf`}
+              target="_blank"
+              rel="noreferrer"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:bg-slate-50 transition-colors flex items-center gap-1 text-xs shadow-xs"
+              title="Download Reviewed PDF"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>PDF</span>
+            </a>
+
+            <a
+              href={`/api/v1/applications/${appId}/letters/${activeTab === 'loi' ? 'letter_of_intent' : 'offer_letter'}/download?format=docx`}
+              target="_blank"
+              rel="noreferrer"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:bg-slate-50 transition-colors flex items-center gap-1 text-xs shadow-xs"
+              title="Download Word (.docx) Document"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>DOCX</span>
+            </a>
+          </div>
         </div>
-      </div>
+
+        {/* Quick Page Jump Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px]">
+          <span className="text-slate-400 font-medium mr-1">Jump to page:</span>
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((pNum) => (
+            <button
+              key={pNum}
+              type="button"
+              onClick={() => setCurrentPage(pNum)}
+              className={`px-2.5 py-0.5 rounded font-mono font-semibold transition-all ${
+                currentPage === pNum
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }`}
+            >
+              Page {pNum}
+              {activeTab === 'offer' && pNum === 5 && ' (Annexure II Salary)'}
+              {activeTab === 'offer' && (pNum === 2 || pNum === 3 || pNum === 4) && ' (Annexure I Terms)'}
+            </button>
+          ))}
+        </div>
+
+        {/* Central Document Page Preview */}
+        <div className="min-h-[960px] py-4 bg-slate-200/60 rounded-xl p-2 sm:p-4 border border-slate-300/80 overflow-x-auto">
+          {viewMode === 'interactive' ? (
+            activeTab === 'loi' ? (
+              <InteractiveLetterOfIntent
+                page={currentPage}
+                content={loiContent}
+                onTextChange={handleLoiTextChange}
+                loiFields={loiFields}
+                onFieldChange={handleLoiFieldChange}
+              />
+            ) : (
+              <InteractiveOfferLetter
+                page={currentPage}
+                content={offerContent}
+                onTextChange={handleOfferTextChange}
+                offerFields={offerFields}
+                onFieldChange={handleOfferFieldChange}
+              />
+            )
+          ) : isPdfLoading ? (
+            <div className="h-[780px] flex flex-col items-center justify-center gap-3 bg-white rounded-lg">
+              <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+              <span className="text-xs font-medium text-slate-600">Loading PDF document...</span>
+            </div>
+          ) : pdfBlobUrl ? (
+            <iframe
+              key={`${pdfBlobUrl}#page=${currentPage}`}
+              src={`${pdfBlobUrl}#page=${currentPage}&toolbar=0&navpanes=0`}
+              title="Official PDF Preview"
+              className="w-full max-w-[800px] mx-auto h-[920px] border-0 bg-white rounded-md shadow-lg"
+            />
+          ) : (
+            <div className="h-[780px] flex flex-col items-center justify-center p-6 text-center text-slate-500 text-xs bg-white rounded-lg">
+              <AlertTriangle className="w-8 h-8 text-amber-500 mb-2" />
+              <span>Unable to render inline preview. Please use the Interactive view or download the PDF.</span>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+          <span>
+            {viewMode === 'interactive'
+              ? 'Interactive mode: click any text to edit directly. Edits save to this candidate\'s copy only.'
+              : 'Compiled PDF view: high-fidelity document rendered via Microsoft Word engine.'}
+          </span>
+          <span>
+            {activeTab === 'loi' ? '2 of 2 pages' : '5 of 5 pages (including Annexures I & II)'}
+          </span>
+        </div>
+      </GlassCard>
 
       {/* Confirmation Modal: Send Letters */}
       <Modal
@@ -752,75 +728,58 @@ export const CandidateLetterReviewPage: React.FC = () => {
                 onClick={() => setSendScope('both')}
                 className={`p-2.5 rounded-lg border text-left transition-all ${
                   sendScope === 'both'
-                    ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 font-semibold shadow-xs'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 ring-1 ring-indigo-600'
+                    : 'border-slate-200 hover:bg-slate-50 text-slate-700'
                 }`}
               >
-                <div className="text-xs font-bold">Both Documents</div>
-                <div className="text-[11px] text-slate-500">LOI + Offer Letter</div>
+                <span className="font-bold block text-xs">Both Letters</span>
+                <span className="text-[10px] text-slate-500">LOI + Offer Letter</span>
               </button>
-
               <button
                 type="button"
                 onClick={() => setSendScope('letter_of_intent')}
                 className={`p-2.5 rounded-lg border text-left transition-all ${
                   sendScope === 'letter_of_intent'
-                    ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 font-semibold shadow-xs'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 ring-1 ring-indigo-600'
+                    : 'border-slate-200 hover:bg-slate-50 text-slate-700'
                 }`}
               >
-                <div className="text-xs font-bold">Only LOI</div>
-                <div className="text-[11px] text-slate-500">Letter of Intent PDF</div>
+                <span className="font-bold block text-xs">LOI Only</span>
+                <span className="text-[10px] text-slate-500">Letter of Intent</span>
               </button>
-
               <button
                 type="button"
                 onClick={() => setSendScope('offer_letter')}
                 className={`p-2.5 rounded-lg border text-left transition-all ${
                   sendScope === 'offer_letter'
-                    ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 font-semibold shadow-xs'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 ring-1 ring-indigo-600'
+                    : 'border-slate-200 hover:bg-slate-50 text-slate-700'
                 }`}
               >
-                <div className="text-xs font-bold">Only Offer Letter</div>
-                <div className="text-[11px] text-slate-500">FFPL 5-page PDF</div>
+                <span className="font-bold block text-xs">Offer Letter Only</span>
+                <span className="text-[10px] text-slate-500">Full 5-page letter</span>
               </button>
-            </div>
-
-            <span className="font-bold text-slate-800 block mb-1.5">Attached PDF Document(s):</span>
-            <div className="space-y-1.5">
-              {(sendScope === 'both' || sendScope === 'letter_of_intent') && (
-                <div className="flex items-center gap-2 p-2 rounded-lg bg-indigo-50/60 border border-indigo-100 text-indigo-900 font-medium">
-                  <FileText className="w-4 h-4 text-indigo-600 flex-shrink-0" />
-                  <span className="truncate">Letter_of_Intent_{application.full_name.replace(/\s+/g, '_')}.pdf</span>
-                </div>
-              )}
-              {(sendScope === 'both' || sendScope === 'offer_letter') && (
-                <div className="flex items-center gap-2 p-2 rounded-lg bg-indigo-50/60 border border-indigo-100 text-indigo-900 font-medium">
-                  <FileCheck2 className="w-4 h-4 text-indigo-600 flex-shrink-0" />
-                  <span className="truncate">Offer_Letter_{application.full_name.replace(/\s+/g, '_')}.pdf</span>
-                </div>
-              )}
             </div>
           </div>
 
-          <label className="flex items-start gap-2.5 pt-2 cursor-pointer select-none">
+          <label className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50/70 border border-amber-200 cursor-pointer">
             <input
               type="checkbox"
               checked={confirmCheckbox}
               onChange={(e) => setConfirmCheckbox(e.target.checked)}
-              className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+              className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
             />
-            <span className="text-slate-600 leading-snug">
-              I confirm that the selected document(s) have been reviewed page-by-page, details are accurate, and the candidate's joining date is finalized.
+            <span className="text-xs text-amber-900 leading-relaxed">
+              I have verified the candidate details, compensation structure, and start date. I authorize dispatch of official documents.
             </span>
           </label>
 
-          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+          <div className="flex justify-end gap-2 pt-2">
             <GlassButton
               type="button"
               variant="secondary"
               onClick={() => setIsSendModalOpen(false)}
+              className="text-xs"
             >
               Cancel
             </GlassButton>
@@ -830,10 +789,9 @@ export const CandidateLetterReviewPage: React.FC = () => {
               disabled={!confirmCheckbox || sendLettersMutation.isPending}
               isLoading={sendLettersMutation.isPending}
               onClick={handleConfirmSend}
-              className="bg-indigo-600 hover:bg-indigo-700"
+              className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white"
             >
-              <Send className="w-4 h-4 mr-1.5" />
-              <span>Confirm & Send Email</span>
+              Confirm & Email Documents
             </GlassButton>
           </div>
         </div>

@@ -782,6 +782,7 @@ class LetterGenerationService:
             "pdf_url": f"/api/v1/applications/{letter.application_id}/letters/{letter.letter_type}/download?format=pdf",
             "inline_pdf_url": f"/api/v1/applications/{letter.application_id}/letters/{letter.letter_type}/download?format=pdf&inline=1",
             "field_values": letter.field_values or {},
+            "content": LetterGenerationService.extract_letter_content(letter),
             "last_edited_at": letter.last_edited_at.isoformat() if letter.last_edited_at else None,
             "sent_at": letter.sent_at.isoformat() if letter.sent_at else None,
             "email_recipient": letter.email_recipient,
@@ -961,14 +962,38 @@ class LetterGenerationService:
         doc.save(output_path)
 
     @staticmethod
+    def extract_letter_content(letter: CandidateLetter) -> Dict[str, Any]:
+        """Extract structured paragraphs, table cells, and fields from candidate DOCX."""
+        if not letter.docx_storage_path or not os.path.exists(letter.docx_storage_path):
+            return {"paragraphs": {}, "tables": [], "field_values": letter.field_values or {}}
+        try:
+            doc = docx.Document(letter.docx_storage_path)
+            paragraphs = {str(i): p.text for i, p in enumerate(doc.paragraphs) if p.text.strip()}
+            tables = [
+                [[cell.text.strip() for cell in row.cells] for row in table.rows]
+                for table in doc.tables
+            ]
+            return {
+                "paragraphs": paragraphs,
+                "tables": tables,
+                "field_values": letter.field_values or {},
+            }
+        except Exception as e:
+            current_app.logger.warning(f"Failed to extract DOCX content: {e}")
+            return {"paragraphs": {}, "tables": [], "field_values": letter.field_values or {}}
+
+    @staticmethod
     def update_letter_draft(
         application_id: uuid.UUID,
         letter_type: str,
         field_values: Dict[str, Any],
         uploaded_docx,
         user: User,
+        text_edits: Optional[Dict[str, str]] = None,
+        paragraphs: Optional[Dict[str, str]] = None,
+        table_cells: Optional[Dict[str, str]] = None,
     ) -> CandidateLetter:
-        """Update candidate letter draft with modified fields or revised DOCX upload."""
+        """Update candidate letter draft with modified fields, in-place paragraph/cell edits, or revised DOCX upload."""
         letter = db.session.execute(
             select(CandidateLetter)
             .where(CandidateLetter.application_id == application_id)
@@ -984,22 +1009,130 @@ class LetterGenerationService:
                 # Save revised docx directly
                 uploaded_docx.save(letter.docx_storage_path)
             else:
-                # Re-render with merged field values from the pristine master template
-                merged_fields = dict(letter.field_values or {})
-                merged_fields.update(field_values)
+                # Open candidate-specific working copy (never overwrite with master)
+                if not os.path.exists(letter.docx_storage_path):
+                    tmpl = letter.template or LetterTemplateService.get_active_template(letter_type)
+                    LetterGenerationService._render_docx(tmpl.storage_path, letter.docx_storage_path, letter.field_values or {}, letter_type)
 
-                # If monthly_salary updated, recalculate salary breakdown
-                if "monthly_salary" in field_values:
+                doc = docx.Document(letter.docx_storage_path)
+                old_fields = dict(letter.field_values or {})
+                merged_fields = dict(old_fields)
+                if field_values:
+                    merged_fields.update(field_values)
+
+                # 1. If monthly_salary updated, recalculate salary breakdown
+                if field_values and "monthly_salary" in field_values:
                     try:
                         ms = float(field_values["monthly_salary"])
                         sb = LetterGenerationService.calculate_salary_breakdown(ms)
                         merged_fields.update(sb)
                         merged_fields["total_salary"] = str(int(ms))
-                    except ValueError:
+                        if letter_type == TEMPLATE_TYPE_LOI:
+                            for t in doc.tables:
+                                for row in t.rows:
+                                    for cell in row.cells:
+                                        replace_in_cell(cell, str(old_fields.get("monthly_salary", "40000")), str(int(ms)))
+                        elif letter_type == TEMPLATE_TYPE_OFFER and doc.tables:
+                            t = doc.tables[0]
+                            if len(t.rows) >= 28:
+                                update_cell_value_preserving_style(t.rows[3].cells[1], str(merged_fields.get("total_ctc_monthly", int(ms))))
+                                update_cell_value_preserving_style(t.rows[3].cells[2], str(merged_fields.get("yearly_ctc", int(ms * 12))))
+                                update_cell_value_preserving_style(t.rows[4].cells[1], str(merged_fields.get("total_ctc_monthly", int(ms))))
+                                update_cell_value_preserving_style(t.rows[4].cells[2], str(merged_fields.get("yearly_ctc", int(ms * 12))))
+                                for r_idx in range(8, min(len(t.rows), 28)):
+                                    row = t.rows[r_idx]
+                                    hname = row.cells[0].text.strip().lower()
+                                    if "basic" in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("basic_monthly", row.cells[1].text)))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("basic_yearly", row.cells[2].text)))
+                                    elif "others allowances" in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("other_allowance_monthly", row.cells[1].text)))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("other_allowance_yearly", row.cells[2].text)))
+                                    elif "medical allowance" in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("medical_monthly", "45")))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("medical_yearly", "540")))
+                                    elif "advance bonus" in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("bonus_monthly", row.cells[1].text)))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("bonus_yearly", row.cells[2].text)))
+                                    elif "advance gratuity" in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("gratuity_monthly", row.cells[1].text)))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("gratuity_yearly", row.cells[2].text)))
+                                    elif "gross salary" in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("gross_monthly", row.cells[1].text)))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("gross_yearly", row.cells[2].text)))
+                                    elif "take home" in hname and "net" not in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("take_home_monthly", row.cells[1].text)))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("take_home_yearly", row.cells[2].text)))
+                                    elif "net take home" in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("net_take_home_monthly", row.cells[1].text)))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("net_take_home_yearly", row.cells[2].text)))
+                                    elif "total ctc" in hname:
+                                        update_cell_value_preserving_style(row.cells[1], str(merged_fields.get("total_ctc_monthly", row.cells[1].text)))
+                                        update_cell_value_preserving_style(row.cells[2], str(merged_fields.get("yearly_ctc", row.cells[2].text)))
+                    except (ValueError, TypeError):
                         pass
 
-                tmpl = letter.template or LetterTemplateService.get_active_template(letter_type)
-                LetterGenerationService._render_docx(tmpl.storage_path, letter.docx_storage_path, merged_fields, letter_type)
+                # 2. Update changed field values in paragraphs and tables
+                if field_values:
+                    for k, new_v in field_values.items():
+                        old_v = old_fields.get(k)
+                        if new_v is not None and str(new_v).strip() != str(old_v or "").strip():
+                            s_new = str(new_v).strip()
+                            s_old = str(old_v).strip() if old_v else ""
+                            for p in doc.paragraphs:
+                                replace_in_runs(p, f"{{{{{k}}}}}", s_new)
+                                replace_in_runs(p, f"{{{{ {k} }}}}", s_new)
+                                if s_old:
+                                    replace_in_runs(p, s_old, s_new)
+                            for t in doc.tables:
+                                for row in t.rows:
+                                    for cell in row.cells:
+                                        replace_in_cell(cell, f"{{{{{k}}}}}", s_new)
+                                        replace_in_cell(cell, f"{{{{ {k} }}}}", s_new)
+                                        if s_old:
+                                            replace_in_cell(cell, s_old, s_new)
+
+                # 3. Direct paragraph index replacements
+                if paragraphs:
+                    for idx_str, new_text in paragraphs.items():
+                        try:
+                            idx = int(idx_str)
+                            if 0 <= idx < len(doc.paragraphs):
+                                p = doc.paragraphs[idx]
+                                new_s = str(new_text)
+                                if p.runs:
+                                    p.runs[0].text = new_s
+                                    for r in p.runs[1:]:
+                                        r.text = ""
+                                else:
+                                    p.text = new_s
+                        except (ValueError, IndexError):
+                            pass
+
+                # 4. Direct table cell replacements
+                if table_cells:
+                    for coord_str, new_text in table_cells.items():
+                        try:
+                            parts = [int(x) for x in coord_str.split(",")]
+                            if len(parts) == 3:
+                                ti, ri, ci = parts
+                                if 0 <= ti < len(doc.tables) and 0 <= ri < len(doc.tables[ti].rows) and 0 <= ci < len(doc.tables[ti].rows[ri].cells):
+                                    update_cell_value_preserving_style(doc.tables[ti].rows[ri].cells[ci], str(new_text))
+                        except (ValueError, IndexError):
+                            pass
+
+                # 5. Direct text replacements
+                if text_edits:
+                    for old_t, new_t in text_edits.items():
+                        if old_t and old_t != new_t:
+                            for p in doc.paragraphs:
+                                replace_in_runs(p, old_t, new_t)
+                            for t in doc.tables:
+                                for row in t.rows:
+                                    for cell in row.cells:
+                                        replace_in_cell(cell, old_t, new_t)
+
+                doc.save(letter.docx_storage_path)
                 letter.field_values = merged_fields
 
             # Invalidate cached pdf to trigger re-generation on demand
