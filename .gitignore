@@ -51,3 +51,6 @@ backend/storage/sent_emails/*
 backend/storage/test_*
 backend/storage/*_copy.*
 backend/scratch_*.txt
+
+# devops
+docker-compose.yml
