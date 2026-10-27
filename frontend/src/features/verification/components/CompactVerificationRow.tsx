@@ -31,6 +31,8 @@ export interface CompactVerificationRowProps {
   selectable?: boolean;
   isSelected?: boolean;
   onToggleSelect?: () => void;
+  actionDisabled?: boolean;
+  disabledReason?: string;
 }
 
 export const CompactVerificationRow: React.FC<CompactVerificationRowProps> = ({
@@ -54,6 +56,8 @@ export const CompactVerificationRow: React.FC<CompactVerificationRowProps> = ({
   selectable = false,
   isSelected = false,
   onToggleSelect,
+  actionDisabled = false,
+  disabledReason,
 }) => {
   const [isExpanded, setIsExpanded] = useState(initialExpanded);
   const [showRemarksInput, setShowRemarksInput] = useState(false);
@@ -207,9 +211,9 @@ export const CompactVerificationRow: React.FC<CompactVerificationRowProps> = ({
                 <button
                   type="button"
                   onClick={handleDoneClick}
-                  disabled={isUpdating}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 transition-colors disabled:opacity-50 shadow-2xs"
-                  title="Mark as Done"
+                  disabled={isUpdating || actionDisabled}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-2xs"
+                  title={actionDisabled ? (disabledReason || 'Action unavailable') : 'Mark as Done'}
                 >
                   <Check className="w-3 h-3" />
                   <span>{isUpdating ? 'Saving...' : 'Mark as Done'}</span>

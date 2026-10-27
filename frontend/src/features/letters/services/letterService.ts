@@ -71,6 +71,17 @@ export const letterService = {
     return res.data.data;
   },
 
+  updateJoiningDate: async (
+    appId: string,
+    joiningDate: string
+  ): Promise<{ application_id: string; joining_date: string }> => {
+    const res = await apiClient.patch<ApiResponse<{ application_id: string; joining_date: string }>>(
+      `/applications/${appId}/joining-date`,
+      { joining_date: joiningDate }
+    );
+    return res.data.data;
+  },
+
   sendCandidateLetters: async (
     appId: string,
     forceResend: boolean = false,
@@ -80,6 +91,45 @@ export const letterService = {
       `/applications/${appId}/letters/send`,
       { force_resend: forceResend, document_scope: documentScope }
     );
+    return res.data.data;
+  },
+
+  previewCandidateEmail: async (
+    appId: string,
+    documentScope: string = 'both'
+  ): Promise<{
+    subject: string;
+    html: string;
+    text: string;
+    recipient: string;
+    candidate_name: string;
+    application_number: string;
+    role_applied: string;
+    attachments: string[];
+  }> => {
+    const res = await apiClient.get<ApiResponse<any>>(
+      `/applications/${appId}/letters/email-preview?document_scope=${documentScope}`
+    );
+    return res.data.data;
+  },
+
+  getSmtpStatus: async (
+    testEmail?: string
+  ): Promise<{
+    success: boolean;
+    mode: 'smtp' | 'not_configured' | 'smtp_error';
+    message: string;
+    config: {
+      host: string | null;
+      port: number;
+      user: string | null;
+      sender_email: string;
+    };
+  }> => {
+    const url = testEmail
+      ? `/letters/smtp-status?test_email=${encodeURIComponent(testEmail)}`
+      : `/letters/smtp-status`;
+    const res = await apiClient.get<ApiResponse<any>>(url);
     return res.data.data;
   },
 };

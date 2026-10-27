@@ -15,18 +15,19 @@ class RegisterRequestSchema(Schema):
 class LoginRequestSchema(Schema):
     """Validation schema for user authentication by email or username."""
 
-    email = fields.String(required=True, validate=validate.Length(min=1))
+    email = fields.String(required=False, validate=validate.Length(min=1))
+    username = fields.String(required=False, validate=validate.Length(min=1))
+    identifier = fields.String(required=False, validate=validate.Length(min=1))
     password = fields.String(required=True, validate=validate.Length(min=1))
 
     @pre_load
     def process_identifier(self, data, **kwargs):
         if not data:
             return data
-        # Support either identifier or email field in request
-        if "identifier" in data and "email" not in data:
-            data["email"] = data["identifier"]
-        if "email" in data and isinstance(data["email"], str):
-            data["email"] = data["email"].strip()
+        # Support email, username, or identifier field in request
+        lookup = data.get("email") or data.get("username") or data.get("identifier")
+        if lookup and isinstance(lookup, str):
+            data["email"] = lookup.strip()
         return data
 
 

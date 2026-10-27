@@ -5,6 +5,7 @@ export const useMasterTemplate = (templateType: 'letter_of_intent' | 'offer_lett
   return useQuery({
     queryKey: ['master-template', templateType],
     queryFn: () => letterService.getMasterTemplate(templateType),
+    staleTime: 1000 * 60 * 5, // 5 minutes
   });
 };
 
@@ -23,6 +24,7 @@ export const useCandidateLetters = (appId?: string) => {
     queryKey: ['candidate-letters', appId],
     queryFn: () => letterService.getCandidateLetters(appId!),
     enabled: Boolean(appId),
+    staleTime: 1000 * 60, // 60 seconds
   });
 };
 

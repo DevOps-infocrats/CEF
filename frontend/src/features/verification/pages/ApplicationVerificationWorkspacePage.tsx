@@ -295,10 +295,33 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
     try {
       const res = await bulkDoneMutation.mutateAsync(appId);
       setIsBulkModalOpen(false);
-      setFeedbackMessage({
-        type: 'success',
-        text: `Bulk verification complete: ${res.marked_done_count} uploaded documents marked as Done.`,
-      });
+      if (res.marked_done_count > 0) {
+        if (res.ineligible_items && res.ineligible_items.length > 0) {
+          const reasons = res.ineligible_items.map((i) => `${i.item_label} (${i.reason})`).join('; ');
+          setFeedbackMessage({
+            type: 'success',
+            text: `Bulk verification complete: ${res.marked_done_count} uploaded document(s) verified. Some could not be verified: ${reasons}`,
+          });
+        } else {
+          setFeedbackMessage({
+            type: 'success',
+            text: `Bulk verification complete: ${res.marked_done_count} uploaded document(s) marked as Verified.`,
+          });
+        }
+      } else {
+        if (res.ineligible_items && res.ineligible_items.length > 0) {
+          const reasons = res.ineligible_items.map((i) => `${i.item_label} (${i.reason})`).join('; ');
+          setFeedbackMessage({
+            type: 'error',
+            text: `No uploaded documents could be verified: ${reasons}`,
+          });
+        } else {
+          setFeedbackMessage({
+            type: 'success',
+            text: `All uploaded documents for this candidate are already verified.`,
+          });
+        }
+      }
     } catch (err: any) {
       setFeedbackMessage({
         type: 'error',
@@ -1192,6 +1215,8 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
               onReset={handleReset}
               isUpdating={updatingKey === 'doc_aadhaar'}
               canVerify={canVerify}
+              actionDisabled={!docsByCategory['aadhaar_card']}
+              disabledReason="Aadhaar Card file must be uploaded before verification"
               {...getRowSelectProps('doc_aadhaar')}
             />
           )}
@@ -1246,6 +1271,8 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
               onReset={handleReset}
               isUpdating={updatingKey === 'doc_pan'}
               canVerify={canVerify}
+              actionDisabled={!docsByCategory['pan_card']}
+              disabledReason="PAN Card file must be uploaded before verification"
               {...getRowSelectProps('doc_pan')}
             />
           )}
@@ -1300,6 +1327,8 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
               onReset={handleReset}
               isUpdating={updatingKey === 'doc_bank_passbook'}
               canVerify={canVerify}
+              actionDisabled={!docsByCategory['bank_passbook']}
+              disabledReason="Bank Passbook file must be uploaded before verification"
               {...getRowSelectProps('doc_bank_passbook')}
             />
           ) : (
@@ -1361,6 +1390,8 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
               onReset={handleReset}
               isUpdating={updatingKey === 'doc_cancelled_cheque'}
               canVerify={canVerify}
+              actionDisabled={!docsByCategory['cancelled_cheque']}
+              disabledReason="Cancelled Cheque file must be uploaded before verification"
               {...getRowSelectProps('doc_cancelled_cheque')}
             />
           ) : (
@@ -1411,6 +1442,8 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
               onReset={handleReset}
               isUpdating={updatingKey === 'doc_marksheet_10th'}
               canVerify={canVerify}
+              actionDisabled={!docsByCategory['marksheet_10th']}
+              disabledReason="10th Marksheet file must be uploaded before verification"
               {...getRowSelectProps('doc_marksheet_10th')}
             />
           ) : (
@@ -1460,6 +1493,8 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
               onReset={handleReset}
               isUpdating={updatingKey === 'doc_marksheet_12th'}
               canVerify={canVerify}
+              actionDisabled={!docsByCategory['marksheet_12th']}
+              disabledReason="12th Marksheet file must be uploaded before verification"
               {...getRowSelectProps('doc_marksheet_12th')}
             />
           ) : (
@@ -1509,6 +1544,8 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
               onReset={handleReset}
               isUpdating={updatingKey === 'doc_previous_employment'}
               canVerify={canVerify}
+              actionDisabled={!docsByCategory['previous_employment']}
+              disabledReason="Previous employment record must be uploaded before verification"
               {...getRowSelectProps('doc_previous_employment')}
             />
           ) : (

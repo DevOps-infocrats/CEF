@@ -15,7 +15,11 @@ from app.extensions import db
 from app.common.database.transactions import atomic
 from app.common.errors.exceptions import ValidationError, NotFoundError, ForbiddenError
 from app.modules.auth.models import AuditLog, User
-from app.modules.candidates.models import CandidateApplication, APPLICATION_STATUS_APPROVED
+from app.modules.candidates.models import (
+    CandidateApplication,
+    APPLICATION_STATUS_APPROVED,
+    APPLICATION_STATUS_OFFER_ACCEPTED,
+)
 from app.modules.letters.models import (
     DocumentTemplate,
     CandidateLetter,
@@ -25,6 +29,7 @@ from app.modules.letters.models import (
     LETTER_STATUS_DRAFT,
     LETTER_STATUS_FINAL,
     LETTER_STATUS_SENT,
+    LETTER_STATUS_ACCEPTED,
     LETTER_STATUS_FAILED,
     DEFAULT_LOI_MAPPINGS,
     DEFAULT_OFFER_MAPPINGS,
@@ -252,6 +257,460 @@ class EmailService:
     """Enterprise email delivery service with real SMTP support and isolated offline fallback."""
 
     @staticmethod
+    def render_congratulations_email(
+        candidate_name: str,
+        application_number: str,
+        registered_email: str,
+        role_applied: str,
+        attachments: List[Dict[str, Any]],
+    ) -> tuple[str, str, str]:
+        """Render the candidate congratulations email matching the approved HTML design.
+        
+        Returns:
+            tuple[subject, html_body, text_body]
+        """
+        subject = "Congratulations on Your Selection | CEF Portal"
+
+        # Generate HTML rows and text bullets for each document attachment
+        doc_rows_html = []
+        doc_bullets_text = []
+        for att in attachments:
+            fname = att.get("filename", "document.pdf")
+            if "Letter_of_Intent" in fname:
+                doc_title = "Letter of Intent"
+            elif "Offer_Letter" in fname:
+                doc_title = "Formal Offer Letter"
+            else:
+                doc_title = "Official Candidate Document"
+
+            doc_bullets_text.append(f"  • {doc_title} ({fname})")
+
+            doc_rows_html.append(f"""
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="padding: 10px 0; border-bottom: 1px solid #e2e8f0;">
+                    <tr>
+                      <td width="36" valign="middle">
+                        <div style="width: 28px; height: 32px; background-color: #fee2e2; border: 1px solid #fecaca; border-radius: 4px; text-align: center; line-height: 32px; font-size: 10px; font-weight: 800; color: #dc2626; font-family: Arial, sans-serif;">
+                          PDF
+                        </div>
+                      </td>
+                      <td valign="middle" style="padding-left: 10px;">
+                        <div style="font-size: 13.5px; font-weight: 700; color: #0f172a;">
+                          {doc_title}
+                        </div>
+                        <div style="font-size: 11.5px; color: #64748b; font-family: Consolas, monospace;">
+                          {fname}
+                        </div>
+                      </td>
+                      <td align="right" valign="middle">
+                        <span style="font-size: 10.5px; font-weight: 600; color: #1e3a8a; background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 3px 8px; border-radius: 4px;">
+                          Official Copy
+                        </span>
+                      </td>
+                    </tr>
+                  </table>""")
+
+        joined_doc_rows = "".join(doc_rows_html)
+        doc_count = len(attachments)
+        joined_doc_bullets = "\n".join(doc_bullets_text) if doc_bullets_text else "  • Finalized Document"
+
+        html_body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{subject}</title>
+  <!--[if mso]>
+  <style type="text/css">
+    body, table, td, p, a, h1, h2, h3 {{ font-family: Arial, sans-serif !important; }}
+    table {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+    img {{ -ms-interpolation-mode: bicubic; }}
+  </style>
+  <![endif]-->
+  <style type="text/css">
+    body {{
+      margin: 0;
+      padding: 0;
+      min-width: 100%;
+      background-color: #f1f5f9;
+      -webkit-text-size-adjust: 100%;
+      -ms-text-size-adjust: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }}
+    table {{
+      border-spacing: 0;
+    }}
+    td {{
+      padding: 0;
+    }}
+    img {{
+      border: 0;
+    }}
+    @media only screen and (max-width: 620px) {{
+      .email-container {{
+        width: 100% !important;
+        max-width: 100% !important;
+        border-radius: 0 !important;
+        border-left: none !important;
+        border-right: none !important;
+      }}
+      .header-cell {{
+        padding: 32px 20px 28px 20px !important;
+      }}
+      .content-cell {{
+        padding: 26px 20px !important;
+      }}
+      .heading-title {{
+        font-size: 22px !important;
+      }}
+    }}
+  </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #334155; line-height: 1.6;">
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f1f5f9; padding: 32px 12px 48px 12px; width: 100% !important;">
+    <tr>
+      <td align="center">
+
+        <!-- Main Card Container -->
+        <table role="presentation" class="email-container" width="600" cellpadding="0" cellspacing="0" border="0" style="width: 100%; max-width: 600px; background-color: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08), 0 8px 10px -6px rgba(15, 23, 42, 0.04); border: 1px solid #e2e8f0; margin: 0 auto;">
+
+          <!-- 1. Premium Navy-Blue Gradient Congratulation Banner -->
+          <tr>
+            <td class="header-cell" style="background-color: #0b1329; background-image: linear-gradient(135deg, #0b1329 0%, #1e3a8a 55%, #0f172a 100%); padding: 42px 32px 36px 32px; text-align: center; border-bottom: 3px solid #f59e0b;">
+              
+              <!-- Elegant Gold Accent Pill with Congratulation Symbol -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin: 0 auto 16px auto;">
+                <tr>
+                  <td style="display: inline-block; padding: 6px 16px; border-radius: 9999px; background-color: rgba(245, 158, 11, 0.16); border: 1px solid rgba(245, 158, 11, 0.45); color: #fbbf24; font-size: 12px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;">
+                    <span style="color: #f59e0b; margin-right: 6px;">&#9733;</span> OFFICIAL SELECTION &amp; APPROVAL <span style="color: #f59e0b; margin-left: 6px;">&#9733;</span>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Main Heading -->
+              <h1 class="heading-title" style="margin: 0; color: #ffffff; font-size: 25px; font-weight: 800; letter-spacing: -0.4px; line-height: 1.3;">
+                Congratulations, {candidate_name}!
+              </h1>
+
+              <!-- Supporting Text -->
+              <p style="margin: 10px 0 0 0; color: #cbd5e1; font-size: 14px; font-weight: 400; line-height: 1.5;">
+                Your application has been approved by our HR team.
+              </p>
+
+              <!-- Application Meta Pill -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin: 18px auto 0 auto;">
+                <tr>
+                  <td style="padding: 6px 14px; background-color: rgba(255, 255, 255, 0.08); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.14); color: #cbd5e1; font-size: 11px; font-family: Consolas, 'Courier New', monospace;">
+                    Application Ref: <strong style="color: #ffffff;">{application_number}</strong> &nbsp;|&nbsp; Role: <strong style="color: #ffffff;">{role_applied}</strong>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- 2. Clean Email Body -->
+          <tr>
+            <td class="content-cell" style="padding: 34px 32px 28px 32px; color: #334155; font-size: 14.5px; line-height: 1.65;">
+              
+              <!-- Salutation -->
+              <p style="margin: 0 0 16px 0; font-size: 15.5px; font-weight: 700; color: #0f172a;">
+                Dear {candidate_name},
+              </p>
+
+              <!-- Highlighted Selection Announcement -->
+              <p style="margin: 0 0 16px 0; font-size: 16px; font-weight: 700; color: #1e3a8a;">
+                Congratulations on your selection!
+              </p>
+
+              <p style="margin: 0 0 16px 0;">
+                We are pleased to inform you that your application has been approved by our HR team. We congratulate you on this achievement and thank you for your interest in joining our organization.
+              </p>
+
+              <p style="margin: 0 0 22px 0;">
+                Please find your finalized document(s) attached to this email for your reference.
+              </p>
+
+              <!-- 3. Clearly Structured 'Your Documents' Section -->
+              <div style="margin: 0 0 24px 0;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 8px;">
+                  <tr>
+                    <td>
+                      <span style="font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: #475569;">
+                        Your Documents
+                      </span>
+                    </td>
+                    <td align="right">
+                      <span style="font-size: 11px; font-weight: 600; color: #059669; background-color: #ecfdf5; border: 1px solid #a7f3d0; padding: 2px 8px; border-radius: 9999px;">
+                        Finalized Attachments ({doc_count})
+                      </span>
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- Documents List Box -->
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 6px 14px;">
+                  {joined_doc_rows}
+                </div>
+              </div>
+
+              <!-- Important Instructions -->
+              <p style="margin: 0 0 16px 0;">
+                We request you to carefully review the attached documents, including the terms and conditions, role details, compensation, and any further instructions mentioned therein.
+              </p>
+
+              <p style="margin: 0 0 16px 0;">
+                Your next steps, if any, will be communicated by our HR team. Should you require any clarification regarding your documents or the joining process, please feel free to contact us.
+              </p>
+
+              <p style="margin: 0 0 28px 0; font-weight: 500; color: #0f172a;">
+                Once again, congratulations! We wish you success and look forward to the opportunity to work with you.
+              </p>
+
+              <!-- 4. Professional HR Signature -->
+              <div style="border-top: 1px solid #e2e8f0; padding-top: 22px; margin-top: 8px;">
+                <p style="margin: 0 0 6px 0; color: #64748b; font-size: 13.5px;">
+                  Warm regards,
+                </p>
+                <p style="margin: 0 0 2px 0; font-size: 14.5px; font-weight: 800; color: #0f172a;">
+                  Human Resources Team
+                </p>
+                <p style="margin: 0 0 2px 0; font-size: 13px; font-weight: 600; color: #1e3a8a;">
+                  CEF Portal
+                </p>
+                <p style="margin: 0; font-size: 12.5px; color: #64748b;">
+                  Candidate Recruitment &amp; HR Operations
+                </p>
+              </div>
+
+            </td>
+          </tr>
+
+          <!-- 5. Subtle Footer -->
+          <tr>
+            <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 18px 32px; text-align: center; font-size: 11.5px; color: #94a3b8; line-height: 1.5;">
+              <p style="margin: 0 0 4px 0;">
+                This official email was sent to <strong style="color: #64748b;">{registered_email}</strong>, which is registered with your application.
+              </p>
+              <p style="margin: 0; color: #cbd5e1;">
+                Candidate Enrollment Form (CEF) Portal &middot; Confidential &amp; Proprietary
+              </p>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>"""
+
+        text_body = f"""Dear {candidate_name},
+
+Congratulations on your selection!
+
+We are pleased to inform you that your application has been approved by our HR team. We congratulate you on this achievement and thank you for your interest in joining our organization.
+
+Please find your finalized document(s) attached to this email for your reference:
+{joined_doc_bullets}
+
+We request you to carefully review the attached documents, including the terms and conditions, role details, compensation, and any further instructions mentioned therein.
+
+Your next steps, if any, will be communicated by our HR team. Should you require any clarification regarding your documents or the joining process, please feel free to contact us.
+
+Once again, congratulations! We wish you success and look forward to the opportunity to work with you.
+
+Warm regards,
+
+Human Resources Team
+CEF Portal
+Candidate Recruitment & HR Operations
+
+--------------------------------------------------------------------------------
+This official email was sent to {registered_email}, which is registered with your application.
+Application Ref: {application_number} | Role: {role_applied}
+"""
+        return subject, html_body, text_body
+
+    @staticmethod
+    def _resolve_smtp_config() -> Dict[str, Any]:
+        """Resolve SMTP settings supporting standard environmental aliases and live .env updates."""
+        try:
+            from dotenv import load_dotenv
+            possible_env_paths = [
+                os.path.join(current_app.root_path, "..", ".env"),
+                os.path.join(os.getcwd(), ".env"),
+                os.path.join(os.getcwd(), "backend", ".env"),
+            ]
+            for ep in possible_env_paths:
+                if os.path.exists(ep):
+                    load_dotenv(dotenv_path=ep, override=True)
+                    break
+        except Exception:
+            pass
+
+        smtp_host = (
+            os.getenv("SMTP_HOST")
+            or os.getenv("MAIL_SERVER")
+            or os.getenv("EMAIL_HOST")
+            or ""
+        ).strip()
+
+        raw_port = (
+            os.getenv("SMTP_PORT")
+            or os.getenv("MAIL_PORT")
+            or os.getenv("EMAIL_PORT")
+            or "587"
+        )
+        try:
+            smtp_port = int(raw_port)
+        except ValueError:
+            smtp_port = 587
+
+        smtp_user = (
+            os.getenv("SMTP_USERNAME")
+            or os.getenv("SMTP_USER")
+            or os.getenv("MAIL_USERNAME")
+            or os.getenv("EMAIL_HOST_USER")
+            or ""
+        ).strip()
+
+        smtp_pass = (
+            os.getenv("SMTP_PASSWORD")
+            or os.getenv("SMTP_PASS")
+            or os.getenv("MAIL_PASSWORD")
+            or os.getenv("EMAIL_HOST_PASSWORD")
+            or ""
+        ).strip()
+
+        # If user pasted a Google App Password with spaces (e.g. 'xxxx xxxx xxxx xxxx'), clean them
+        if "gmail" in smtp_host.lower() and " " in smtp_pass:
+            smtp_pass = smtp_pass.replace(" ", "")
+
+        smtp_use_tls = (
+            os.getenv("SMTP_USE_TLS")
+            or os.getenv("MAIL_USE_TLS")
+            or os.getenv("EMAIL_USE_TLS")
+            or "True"
+        ).lower() in ("true", "1", "yes")
+
+        smtp_use_ssl = (
+            os.getenv("SMTP_USE_SSL")
+            or os.getenv("MAIL_USE_SSL")
+            or os.getenv("EMAIL_USE_SSL")
+            or ("True" if smtp_port == 465 else "False")
+        ).lower() in ("true", "1", "yes")
+
+        default_sender = smtp_user if "@" in smtp_user else "hr@fiberforce.in"
+        sender_email = (
+            os.getenv("SMTP_SENDER_EMAIL")
+            or os.getenv("MAIL_DEFAULT_SENDER")
+            or os.getenv("DEFAULT_FROM_EMAIL")
+            or os.getenv("EMAIL_FROM")
+            or default_sender
+        ).strip()
+
+        sender_name = (
+            os.getenv("SMTP_SENDER_NAME")
+            or os.getenv("MAIL_SENDER_NAME")
+            or "CEF Portal HR Operations"
+        ).strip()
+
+        return {
+            "host": smtp_host,
+            "port": smtp_port,
+            "user": smtp_user,
+            "password": smtp_pass,
+            "use_tls": smtp_use_tls,
+            "use_ssl": smtp_use_ssl,
+            "sender_email": sender_email,
+            "sender_name": sender_name,
+        }
+
+    @staticmethod
+    def test_smtp_connection(to_test_email: Optional[str] = None) -> Dict[str, Any]:
+        """Diagnose and verify live SMTP connection and optional test email dispatch."""
+        cfg = EmailService._resolve_smtp_config()
+        if not cfg["host"]:
+            return {
+                "success": False,
+                "mode": "not_configured",
+                "message": (
+                    "SMTP is not configured in backend/.env. Currently running in local emulated mode. "
+                    "Please set SMTP_HOST, SMTP_PORT, SMTP_USERNAME, and SMTP_PASSWORD to send live emails."
+                ),
+                "config": {
+                    "host": None,
+                    "port": cfg["port"],
+                    "user": cfg["user"] or None,
+                    "sender_email": cfg["sender_email"],
+                },
+            }
+
+        import ssl
+        context = ssl.create_default_context()
+        smtp_verify_cert = os.getenv("SMTP_VERIFY_CERT", "True").lower() not in ("false", "0", "no")
+        if not smtp_verify_cert:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+
+        try:
+            if cfg["use_ssl"] or cfg["port"] == 465:
+                server = smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=20, context=context)
+                server.ehlo()
+            else:
+                server = smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
+                server.ehlo()
+                if cfg["use_tls"]:
+                    server.starttls(context=context)
+                    server.ehlo()
+
+            if cfg["user"] and cfg["password"]:
+                server.login(cfg["user"], cfg["password"])
+
+            if to_test_email and "@" in to_test_email:
+                msg = MIMEMultipart("alternative")
+                msg["From"] = f"{cfg['sender_name']} <{cfg['sender_email']}>"
+                msg["To"] = to_test_email
+                msg["Subject"] = "SMTP Diagnostic Test | CEF Portal"
+                msg["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+                msg.attach(MIMEText("This is a live test email confirming that your CEF Portal SMTP configuration is active.", "plain", "utf-8"))
+                server.send_message(msg)
+
+            try:
+                server.quit()
+            except Exception:
+                pass
+            return {
+                "success": True,
+                "mode": "smtp",
+                "message": f"Successfully connected and authenticated with SMTP server '{cfg['host']}:{cfg['port']}'.",
+                "config": {
+                    "host": cfg["host"],
+                    "port": cfg["port"],
+                    "user": cfg["user"],
+                    "sender_email": cfg["sender_email"],
+                    "tls": cfg["use_tls"],
+                    "ssl": cfg["use_ssl"],
+                },
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "mode": "smtp_error",
+                "message": f"SMTP Connection or Authentication Failed: {str(e)}",
+                "config": {
+                    "host": cfg["host"],
+                    "port": cfg["port"],
+                    "user": cfg["user"],
+                    "sender_email": cfg["sender_email"],
+                },
+                "error": str(e),
+            }
+
+    @staticmethod
     def send_email(
         to_email: str,
         subject: str,
@@ -263,15 +722,8 @@ class EmailService:
         if not to_email or "@" not in to_email:
             raise ValidationError(f"Invalid recipient email address: '{to_email}'")
 
-        smtp_host = os.getenv("SMTP_HOST", "").strip()
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
-        smtp_user = os.getenv("SMTP_USERNAME", "").strip()
-        smtp_pass = os.getenv("SMTP_PASSWORD", "").strip()
-        smtp_use_tls = os.getenv("SMTP_USE_TLS", "True").lower() in ("true", "1")
-        sender_email = os.getenv("SMTP_SENDER_EMAIL", "hr@fiberforce.in").strip()
-        sender_name = os.getenv("SMTP_SENDER_NAME", "Fiber Force Private Limited").strip()
-
-        from_header = f"{sender_name} <{sender_email}>"
+        cfg = EmailService._resolve_smtp_config()
+        from_header = f"{cfg['sender_name']} <{cfg['sender_email']}>"
 
         msg = MIMEMultipart("mixed")
         msg["From"] = from_header
@@ -298,8 +750,8 @@ class EmailService:
                     part["Content-Disposition"] = f'attachment; filename="{fname}"'
                     msg.attach(part)
 
-        # Emulated dispatch mode if SMTP_HOST is not configured or set to mock/console/testing
-        if not smtp_host or smtp_host.lower() in ("console", "mock", "none") or current_app.config.get("TESTING"):
+        # Emulated dispatch mode if SMTP is not configured or in test mode
+        if not cfg["host"] or cfg["host"].lower() in ("console", "mock", "none") or current_app.config.get("TESTING"):
             sent_dir = get_sent_emails_storage_dir()
             msg_id = f"mock-msg-{uuid.uuid4().hex[:12]}"
             log_path = os.path.join(sent_dir, f"{msg_id}.eml")
@@ -315,34 +767,49 @@ class EmailService:
                 "message_id": msg_id,
                 "recipient": to_email,
                 "log_path": log_path,
+                "smtp_host": None,
             }
 
         # Live SMTP delivery
         try:
-            if smtp_port == 465:
-                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30)
-            else:
-                server = smtplib.SMTP(smtp_host, smtp_port, timeout=30)
-                if smtp_use_tls:
-                    server.starttls()
+            import ssl
+            context = ssl.create_default_context()
+            smtp_verify_cert = os.getenv("SMTP_VERIFY_CERT", "True").lower() not in ("false", "0", "no")
+            if not smtp_verify_cert:
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
 
-            if smtp_user and smtp_pass:
-                server.login(smtp_user, smtp_pass)
+            if cfg["use_ssl"] or cfg["port"] == 465:
+                server = smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=30, context=context)
+                server.ehlo()
+            else:
+                server = smtplib.SMTP(cfg["host"], cfg["port"], timeout=30)
+                server.ehlo()
+                if cfg["use_tls"]:
+                    server.starttls(context=context)
+                    server.ehlo()
+
+            if cfg["user"] and cfg["password"]:
+                server.login(cfg["user"], cfg["password"])
 
             server.send_message(msg)
-            server.quit()
+            try:
+                server.quit()
+            except Exception:
+                pass
 
             msg_id = f"smtp-msg-{uuid.uuid4().hex[:12]}"
-            current_app.logger.info(f"[EmailService:SMTP] Dispatched email to {to_email} via {smtp_host}:{smtp_port}")
+            current_app.logger.info(f"[EmailService:SMTP] Dispatched email to {to_email} via {cfg['host']}:{cfg['port']}")
             return {
                 "success": True,
                 "mode": "smtp",
                 "message_id": msg_id,
                 "recipient": to_email,
+                "smtp_host": cfg["host"],
             }
         except Exception as e:
             current_app.logger.error(f"[EmailService:ERROR] Failed to send email to {to_email}: {str(e)}")
-            raise ValidationError(f"Email service delivery failure: {str(e)}")
+            raise ValidationError(f"Email service delivery failure ({cfg['host']}:{cfg['port']}): {str(e)}")
 
 
 class LetterTemplateService:
@@ -641,6 +1108,20 @@ class LetterGenerationService:
         return f"FFPL/RAJ/{now.strftime('%Y-%y')}/{now.strftime('%m')}/{formatted_seq}"
 
     @staticmethod
+    def validate_and_normalize_joining_date(date_str: str) -> str:
+        """Validate joining date format and normalize to standard DD/MM/YYYY."""
+        clean = (date_str or "").strip()
+        if not clean:
+            raise ValidationError("Joining Date cannot be empty.")
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
+            try:
+                dt = datetime.strptime(clean, fmt)
+                return dt.strftime("%d/%m/%Y")
+            except ValueError:
+                continue
+        raise ValidationError(f"Invalid date format: '{date_str}'. Expected valid calendar date in DD/MM/YYYY format.")
+
+    @staticmethod
     def get_or_create_candidate_letters(
         application_id: uuid.UUID,
         user: User,
@@ -662,153 +1143,127 @@ class LetterGenerationService:
                     "Letters can only be generated for APPROVED candidates."
                 )
 
-            LetterTemplateService.ensure_default_templates()
-
-            loi_tmpl = LetterTemplateService.get_active_template(TEMPLATE_TYPE_LOI)
-            offer_tmpl = LetterTemplateService.get_active_template(TEMPLATE_TYPE_OFFER)
-
-            app_dir = get_generated_letters_storage_dir(str(app.id))
-
-            # Check existing LOI, keeping newest if duplicates exist
-            all_loi = db.session.execute(
+            # Query existing LOI and Offer Letter in one query
+            existing_letters = db.session.execute(
                 select(CandidateLetter)
                 .where(CandidateLetter.application_id == app.id)
-                .where(CandidateLetter.letter_type == TEMPLATE_TYPE_LOI)
+                .where(CandidateLetter.letter_type.in_([TEMPLATE_TYPE_LOI, TEMPLATE_TYPE_OFFER]))
                 .order_by(CandidateLetter.version.desc(), CandidateLetter.created_at.desc())
             ).scalars().all()
+
+            all_loi = [l for l in existing_letters if l.letter_type == TEMPLATE_TYPE_LOI]
+            all_offer = [l for l in existing_letters if l.letter_type == TEMPLATE_TYPE_OFFER]
+
             loi_letter = all_loi[0] if all_loi else None
+            offer_letter = all_offer[0] if all_offer else None
+
+            # Clean up any unexpected duplicate records
             if len(all_loi) > 1:
                 for dup in all_loi[1:]:
                     db.session.delete(dup)
-
-            # Check existing Offer Letter, keeping newest if duplicates exist
-            all_offer = db.session.execute(
-                select(CandidateLetter)
-                .where(CandidateLetter.application_id == app.id)
-                .where(CandidateLetter.letter_type == TEMPLATE_TYPE_OFFER)
-                .order_by(CandidateLetter.version.desc(), CandidateLetter.created_at.desc())
-            ).scalars().all()
-            offer_letter = all_offer[0] if all_offer else None
             if len(all_offer) > 1:
                 for dup in all_offer[1:]:
                     db.session.delete(dup)
 
-            monthly_salary = float(app.negotiated_salary or app.asking_salary or 40000)
-            salary_breakdown = LetterGenerationService.calculate_salary_breakdown(monthly_salary)
+            app_dir = get_generated_letters_storage_dir(str(app.id))
+            needs_loi = not loi_letter or not os.path.exists(loi_letter.docx_storage_path)
+            needs_offer = not offer_letter or not os.path.exists(offer_letter.docx_storage_path)
 
-            # Build candidate address
-            addr_parts = [app.current_address_line1]
-            if app.current_address_line2:
-                addr_parts.append(app.current_address_line2)
-            addr_parts.append(f"{app.current_city}, {app.current_state} - {app.current_pincode}")
-            candidate_address = ", ".join(p for p in addr_parts if p)
+            if needs_loi or needs_offer:
+                loi_tmpl = LetterTemplateService.get_active_template(TEMPLATE_TYPE_LOI)
+                offer_tmpl = LetterTemplateService.get_active_template(TEMPLATE_TYPE_OFFER)
 
-            # Build approved deployment location (Circle, District, Block)
-            approved_location = LetterGenerationService.build_approved_location(app)
+                monthly_salary = float(app.negotiated_salary or app.asking_salary or 40000)
+                salary_breakdown = LetterGenerationService.calculate_salary_breakdown(monthly_salary)
 
-            # Sequential Reference number (starts at 000100, increments +1 for each offer letter)
-            ref_num = LetterGenerationService.get_next_offer_reference_number(
-                exclude_letter_id=offer_letter.id if offer_letter else None
-            )
+                # Build candidate address
+                addr_parts = [app.current_address_line1]
+                if app.current_address_line2:
+                    addr_parts.append(app.current_address_line2)
+                addr_parts.append(f"{app.current_city}, {app.current_state} - {app.current_pincode}")
+                candidate_address = ", ".join(p for p in addr_parts if p)
 
-            # If existing offer letter has an old reference number format (<100 or hash), upgrade to sequential 000100+
-            if offer_letter and offer_letter.field_values and isinstance(offer_letter.field_values, dict):
-                current_ref = str(offer_letter.field_values.get("reference_number", "")).strip()
-                ref_match = re.search(r"/(\d+)$", current_ref)
-                if not ref_match or int(ref_match.group(1)) < 100:
-                    offer_letter.field_values["reference_number"] = ref_num
-                    db.session.add(offer_letter)
-                cur_loc = str(offer_letter.field_values.get("approved_location", "")).strip()
-                if not cur_loc or cur_loc == "Behrunda 2 Rajasthan" or "District " in cur_loc:
-                    offer_letter.field_values["approved_location"] = approved_location
-                    offer_letter.field_values["location"] = approved_location
-                    db.session.add(offer_letter)
+                # Build approved deployment location (Circle, District, Block)
+                approved_location = LetterGenerationService.build_approved_location(app)
 
-            if loi_letter and loi_letter.field_values and isinstance(loi_letter.field_values, dict):
-                cur_loc = str(loi_letter.field_values.get("approved_location", "")).strip()
-                if not cur_loc or cur_loc == "District Location" or "District " in cur_loc:
-                    loi_letter.field_values["approved_location"] = approved_location
-                    loi_letter.field_values["location"] = approved_location
-                    db.session.add(loi_letter)
-
-            # Default fields extracted from DB
-            default_fields = {
-                "current_date": datetime.now().strftime("%d/%m/%Y"),
-                "date": datetime.now().strftime("%d/%m/%Y"),
-                "candidate_full_name": app.full_name,
-                "candidate_name": app.full_name,
-                "candidate_address": candidate_address,
-                "candidate_mobile": app.mobile_number,
-                "mobile_number": app.mobile_number,
-                "candidate_email": app.email,
-                "candidate_aadhaar": app.aadhaar_number or "-",
-                "approved_role_name": app.role_applied,
-                "role_applied": app.role_applied,
-                "approved_location": approved_location,
-                "location": approved_location,
-                "joining_date": "",  # To be specified by user in review page
-                "reference_number": ref_num,
-                "monthly_salary": f"{int(monthly_salary)}",
-                "performance_incentive": "0",
-                "miscellaneous_allowance": "0",
-                "total_salary": f"{int(monthly_salary)}",
-                **salary_breakdown,
-            }
-
-            # Create LOI if not exists
-            if not loi_letter:
-                loi_docx_path = os.path.join(app_dir, f"loi_{app.application_number}.docx")
-                LetterGenerationService._render_docx(loi_tmpl.storage_path, loi_docx_path, default_fields, TEMPLATE_TYPE_LOI)
-                loi_letter = CandidateLetter(
-                    application_id=app.id,
-                    template_id=loi_tmpl.id,
-                    letter_type=TEMPLATE_TYPE_LOI,
-                    version=1,
-                    status=LETTER_STATUS_DRAFT,
-                    docx_storage_path=loi_docx_path,
-                    field_values=default_fields,
-                    last_edited_by_id=user.id,
-                    last_edited_at=utc_now(),
+                # Sequential Reference number (starts at 000100, increments +1 for each offer letter)
+                ref_num = LetterGenerationService.get_next_offer_reference_number(
+                    exclude_letter_id=offer_letter.id if offer_letter else None
                 )
-                db.session.add(loi_letter)
-                db.session.flush()
 
-            # Create Offer Letter if not exists
-            if not offer_letter:
-                offer_docx_path = os.path.join(app_dir, f"offer_{app.application_number}.docx")
-                LetterGenerationService._render_docx(offer_tmpl.storage_path, offer_docx_path, default_fields, TEMPLATE_TYPE_OFFER)
-                offer_letter = CandidateLetter(
-                    application_id=app.id,
-                    template_id=offer_tmpl.id,
-                    letter_type=TEMPLATE_TYPE_OFFER,
-                    version=1,
-                    status=LETTER_STATUS_DRAFT,
-                    docx_storage_path=offer_docx_path,
-                    field_values=default_fields,
-                    last_edited_by_id=user.id,
-                    last_edited_at=utc_now(),
-                )
-                db.session.add(offer_letter)
-                db.session.flush()
+                default_fields = {
+                    "current_date": datetime.now().strftime("%d/%m/%Y"),
+                    "date": datetime.now().strftime("%d/%m/%Y"),
+                    "candidate_full_name": app.full_name,
+                    "candidate_name": app.full_name,
+                    "candidate_address": candidate_address,
+                    "candidate_mobile": app.mobile_number,
+                    "mobile_number": app.mobile_number,
+                    "candidate_email": app.email,
+                    "candidate_aadhaar": app.aadhaar_number or "-",
+                    "approved_role_name": app.role_applied,
+                    "role_applied": app.role_applied,
+                    "approved_location": approved_location,
+                    "location": approved_location,
+                    "joining_date": getattr(app, "joining_date", None) or (loi_letter.field_values.get("joining_date") if loi_letter and loi_letter.field_values else None) or (offer_letter.field_values.get("joining_date") if offer_letter and offer_letter.field_values else None) or "",
+                    "reference_number": ref_num,
+                    "monthly_salary": f"{int(monthly_salary)}",
+                    "performance_incentive": "0",
+                    "miscellaneous_allowance": "0",
+                    "total_salary": f"{int(monthly_salary)}",
+                    **salary_breakdown,
+                }
 
-            # Pre-render PDF if missing
-            try:
-                if not loi_letter.pdf_storage_path or not os.path.exists(loi_letter.pdf_storage_path):
-                    LetterGenerationService.get_or_render_pdf(loi_letter)
-            except Exception as e:
-                current_app.logger.warning(f"Could not pre-render LOI PDF on creation: {e}")
+                # Create LOI if missing
+                if needs_loi:
+                    loi_docx_path = os.path.join(app_dir, f"loi_{app.application_number}.docx")
+                    LetterGenerationService._render_docx(loi_tmpl.storage_path, loi_docx_path, default_fields, TEMPLATE_TYPE_LOI)
+                    if not loi_letter:
+                        loi_letter = CandidateLetter(
+                            application_id=app.id,
+                            template_id=loi_tmpl.id,
+                            letter_type=TEMPLATE_TYPE_LOI,
+                            version=1,
+                            status=LETTER_STATUS_DRAFT,
+                            docx_storage_path=loi_docx_path,
+                            field_values=default_fields,
+                            last_edited_by_id=user.id,
+                            last_edited_at=utc_now(),
+                        )
+                        db.session.add(loi_letter)
+                    else:
+                        loi_letter.docx_storage_path = loi_docx_path
+                        loi_letter.field_values = default_fields
+                    db.session.flush()
 
-            try:
-                if not offer_letter.pdf_storage_path or not os.path.exists(offer_letter.pdf_storage_path):
-                    LetterGenerationService.get_or_render_pdf(offer_letter)
-            except Exception as e:
-                current_app.logger.warning(f"Could not pre-render Offer Letter PDF on creation: {e}")
+                # Create Offer Letter if missing
+                if needs_offer:
+                    offer_docx_path = os.path.join(app_dir, f"offer_{app.application_number}.docx")
+                    LetterGenerationService._render_docx(offer_tmpl.storage_path, offer_docx_path, default_fields, TEMPLATE_TYPE_OFFER)
+                    if not offer_letter:
+                        offer_letter = CandidateLetter(
+                            application_id=app.id,
+                            template_id=offer_tmpl.id,
+                            letter_type=TEMPLATE_TYPE_OFFER,
+                            version=1,
+                            status=LETTER_STATUS_DRAFT,
+                            docx_storage_path=offer_docx_path,
+                            field_values=default_fields,
+                            last_edited_by_id=user.id,
+                            last_edited_at=utc_now(),
+                        )
+                        db.session.add(offer_letter)
+                    else:
+                        offer_letter.docx_storage_path = offer_docx_path
+                        offer_letter.field_values = default_fields
+                    db.session.flush()
 
-            db.session.commit()
+                db.session.commit()
 
         return {
             "application": {
                 "id": str(app.id),
+                "user_id": str(app.user_id),
                 "application_number": app.application_number,
                 "full_name": app.full_name,
                 "email": app.email,
@@ -818,7 +1273,11 @@ class LetterGenerationService:
                 "district": app.district,
                 "circle": app.circle,
                 "current_state": app.current_state,
+                "joining_date": getattr(app, "joining_date", None) or (loi_letter.field_values.get("joining_date") if loi_letter and loi_letter.field_values else None) or (offer_letter.field_values.get("joining_date") if offer_letter and offer_letter.field_values else None) or None,
                 "negotiated_salary": float(app.negotiated_salary) if app.negotiated_salary else None,
+                "offer_accepted_at": app.offer_accepted_at.isoformat() if app.offer_accepted_at else None,
+                "offer_acceptance_status": app.offer_acceptance_status,
+                "offer_accepted_by_id": str(app.offer_accepted_by_id) if app.offer_accepted_by_id else None,
             },
             "letter_of_intent": LetterGenerationService._serialize_letter(loi_letter),
             "offer_letter": LetterGenerationService._serialize_letter(offer_letter),
@@ -848,6 +1307,8 @@ class LetterGenerationService:
             "content": LetterGenerationService.extract_letter_content(letter),
             "last_edited_at": letter.last_edited_at.isoformat() if letter.last_edited_at else None,
             "sent_at": letter.sent_at.isoformat() if letter.sent_at else None,
+            "accepted_at": letter.accepted_at.isoformat() if letter.accepted_at else None,
+            "accepted_by_id": str(letter.accepted_by_id) if letter.accepted_by_id else None,
             "email_recipient": letter.email_recipient,
             "email_status": letter.email_status,
             "email_error": letter.email_error,
@@ -1050,8 +1511,8 @@ class LetterGenerationService:
         application_id: uuid.UUID,
         letter_type: str,
         field_values: Dict[str, Any],
-        uploaded_docx,
-        user: User,
+        uploaded_docx: Optional[Any] = None,
+        user: Optional[User] = None,
         text_edits: Optional[Dict[str, str]] = None,
         paragraphs: Optional[Dict[str, str]] = None,
         table_cells: Optional[Dict[str, str]] = None,
@@ -1081,6 +1542,13 @@ class LetterGenerationService:
                 old_fields = dict(letter.field_values or {})
                 merged_fields = dict(old_fields)
                 if field_values:
+                    if "joining_date" in field_values:
+                        raw_jd = field_values.get("joining_date")
+                        if raw_jd is not None and str(raw_jd).strip():
+                            normalized_jd = LetterGenerationService.validate_and_normalize_joining_date(str(raw_jd))
+                            field_values["joining_date"] = normalized_jd
+                        elif raw_jd == "":
+                            field_values["joining_date"] = ""
                     merged_fields.update(field_values)
 
                 # 1. If monthly_salary updated, recalculate salary breakdown
@@ -1147,6 +1615,17 @@ class LetterGenerationService:
                                 replace_in_runs(p, f"{{{{ {k} }}}}", s_new)
                                 if s_old:
                                     replace_in_runs(p, s_old, s_new)
+                                if k == "joining_date":
+                                    if letter_type == TEMPLATE_TYPE_LOI:
+                                        replace_in_runs(p, "Start Date of Services: 01/11/2026", f"Start Date of Services: {s_new}")
+                                        replace_in_runs(p, "01/11/2026", s_new)
+                                        if s_old:
+                                            replace_in_runs(p, f"Start Date of Services: {s_old}", f"Start Date of Services: {s_new}")
+                                    elif letter_type == TEMPLATE_TYPE_OFFER:
+                                        replace_in_runs(p, "Dated: 01/10/2026.", f"Dated: {s_new}.")
+                                        replace_in_runs(p, "01/10/2026", s_new)
+                                        if s_old:
+                                            replace_in_runs(p, f"Dated: {s_old}.", f"Dated: {s_new}.")
                             for t in doc.tables:
                                 for row in t.rows:
                                     for cell in row.cells:
@@ -1198,6 +1677,66 @@ class LetterGenerationService:
                 doc.save(letter.docx_storage_path)
                 letter.field_values = merged_fields
 
+                # Synchronize joining_date to parent CandidateApplication and peer CandidateLetter
+                if field_values and "joining_date" in field_values:
+                    new_jd = merged_fields.get("joining_date")
+                    if new_jd:
+                        from app.modules.candidates.models import CandidateApplication
+                        app_record = db.session.get(CandidateApplication, application_id)
+                        if app_record:
+                            app_record.joining_date = new_jd
+
+                        peer_type = TEMPLATE_TYPE_OFFER if letter_type == TEMPLATE_TYPE_LOI else TEMPLATE_TYPE_LOI
+                        peer_letter = db.session.execute(
+                            select(CandidateLetter)
+                            .where(CandidateLetter.application_id == application_id)
+                            .where(CandidateLetter.letter_type == peer_type)
+                            .order_by(CandidateLetter.version.desc())
+                        ).scalars().first()
+
+                        if peer_letter and peer_letter.id != letter.id:
+                            peer_fields = dict(peer_letter.field_values or {})
+                            old_peer_jd = peer_fields.get("joining_date", "")
+                            if old_peer_jd != new_jd:
+                                peer_fields["joining_date"] = new_jd
+                                peer_letter.field_values = peer_fields
+                                if os.path.exists(peer_letter.docx_storage_path):
+                                    try:
+                                        peer_doc = docx.Document(peer_letter.docx_storage_path)
+                                        for p in peer_doc.paragraphs:
+                                            replace_in_runs(p, "{{joining_date}}", new_jd)
+                                            replace_in_runs(p, "{{ joining_date }}", new_jd)
+                                            if old_peer_jd:
+                                                replace_in_runs(p, old_peer_jd, new_jd)
+                                            if peer_type == TEMPLATE_TYPE_LOI:
+                                                replace_in_runs(p, "Start Date of Services: 01/11/2026", f"Start Date of Services: {new_jd}")
+                                                replace_in_runs(p, "01/11/2026", new_jd)
+                                                if old_peer_jd:
+                                                    replace_in_runs(p, f"Start Date of Services: {old_peer_jd}", f"Start Date of Services: {new_jd}")
+                                            else:
+                                                replace_in_runs(p, "Dated: 01/10/2026.", f"Dated: {new_jd}.")
+                                                replace_in_runs(p, "01/10/2026", new_jd)
+                                                if old_peer_jd:
+                                                    replace_in_runs(p, f"Dated: {old_peer_jd}.", f"Dated: {new_jd}.")
+                                        for t in peer_doc.tables:
+                                            for row in t.rows:
+                                                for cell in row.cells:
+                                                    replace_in_cell(cell, "{{joining_date}}", new_jd)
+                                                    replace_in_cell(cell, "{{ joining_date }}", new_jd)
+                                                    if old_peer_jd:
+                                                        replace_in_cell(cell, old_peer_jd, new_jd)
+                                        peer_doc.save(peer_letter.docx_storage_path)
+                                    except Exception:
+                                        pass
+                                if peer_letter.pdf_storage_path and os.path.exists(peer_letter.pdf_storage_path):
+                                    try:
+                                        os.remove(peer_letter.pdf_storage_path)
+                                    except Exception:
+                                        pass
+                                peer_letter.pdf_storage_path = None
+                                peer_letter.last_edited_by_id = user.id if user else None
+                                peer_letter.last_edited_at = utc_now()
+
             # Invalidate cached pdf to trigger re-generation on demand
             if letter.pdf_storage_path and os.path.exists(letter.pdf_storage_path):
                 try:
@@ -1205,7 +1744,7 @@ class LetterGenerationService:
                 except Exception:
                     pass
             letter.pdf_storage_path = None
-            letter.last_edited_by_id = user.id
+            letter.last_edited_by_id = user.id if user else None
             letter.last_edited_at = utc_now()
             letter.version += 1
             letter.status = LETTER_STATUS_DRAFT
@@ -1348,7 +1887,21 @@ class LetterGenerationService:
         # Validate mandatory placeholder fields: joining_date
         loi_joining = (loi_letter.field_values or {}).get("joining_date", "").strip() if loi_letter else ""
         offer_joining = (offer_letter.field_values or {}).get("joining_date", "").strip() if offer_letter else ""
-        joining_str = offer_joining or loi_joining
+        app_joining = (getattr(app, "joining_date", None) or "").strip()
+        joining_str = offer_joining or loi_joining or app_joining
+
+        # Automatically synchronize joining date so neither letter misses it
+        if joining_str:
+            if include_loi and loi_letter and not loi_joining:
+                fv = dict(loi_letter.field_values or {})
+                fv["joining_date"] = joining_str
+                loi_letter.field_values = fv
+                loi_joining = joining_str
+            if include_offer and offer_letter and not offer_joining:
+                fv = dict(offer_letter.field_values or {})
+                fv["joining_date"] = joining_str
+                offer_letter.field_values = fv
+                offer_joining = joining_str
 
         if (include_loi and not loi_joining) or (include_offer and not offer_joining):
             raise ValidationError(
@@ -1381,56 +1934,13 @@ class LetterGenerationService:
         if not attachments:
             raise ValidationError("No document attachments were selected for dispatch.")
 
-        subject = "Congratulations — Your Application Has Been Approved"
-        role_title = app.role_applied
-
-        doc_mention = "official <strong>Letter of Intent</strong> and formal <strong>Offer Letter</strong>"
-        if not include_loi:
-            doc_mention = "formal <strong>Offer Letter</strong>"
-        elif not include_offer:
-            doc_mention = "official <strong>Letter of Intent</strong>"
-
-        html_body = f"""
-        <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
-            <div style="background-color: #4f46e5; padding: 24px; text-align: center; border-radius: 8px 8px 0 0;">
-                <h1 style="color: #ffffff; margin: 0; font-size: 22px;">Fiber Force Private Limited</h1>
-                <p style="color: #e0e7ff; margin: 5px 0 0; font-size: 14px;">Official Candidate Appointment & Enrollment</p>
-            </div>
-            <div style="padding: 28px; background-color: #ffffff; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 8px 8px;">
-                <p style="font-size: 16px; font-weight: bold;">Dear {app.full_name},</p>
-                <p>We are delighted to congratulate you on your selection! Your candidate application (<strong>{app.application_number}</strong>) has been officially reviewed and <strong>Approved</strong>.</p>
-                <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 14px 18px; margin: 20px 0; border-radius: 0 4px 4px 0;">
-                    <p style="margin: 0; font-size: 14px;"><strong>Designation:</strong> {role_title}</p>
-                    <p style="margin: 4px 0 0; font-size: 14px;"><strong>Assigned Location:</strong> District {app.district}, {app.current_state}</p>
-                    <p style="margin: 4px 0 0; font-size: 14px;"><strong>Service Commencement / Joining Date:</strong> {joining_str}</p>
-                </div>
-                <p>Please find attached your {doc_mention} including the terms of engagement and compensation structure.</p>
-                <p>Please review the attached documents, sign the acceptance copy, and present it on or before your stipulated service commencement date.</p>
-                <p style="margin-top: 24px;">Welcome aboard! We look forward to a rewarding and successful journey together.</p>
-                <p style="margin-top: 28px; font-size: 14px; color: #64748b;">
-                    Sincerely,<br/>
-                    <strong>HR Department</strong><br/>
-                    Fiber Force Private Limited
-                </p>
-            </div>
-        </div>
-        """
-
-        text_body = f"""
-Dear {app.full_name},
-
-Congratulations! Your candidate application ({app.application_number}) has been approved.
-
-Position: {role_title}
-Location: District {app.district}, {app.current_state}
-Joining Date: {joining_str}
-
-Please find attached your official documentation. Kindly sign and return the acceptance copy by your service start date.
-
-Sincerely,
-HR Department
-Fiber Force Private Limited
-        """
+        subject, html_body, text_body = EmailService.render_congratulations_email(
+            candidate_name=app.full_name,
+            application_number=app.application_number,
+            registered_email=app.email,
+            role_applied=app.role_applied or "Candidate",
+            attachments=attachments,
+        )
 
         try:
             send_result = EmailService.send_email(
@@ -1475,12 +1985,21 @@ Fiber Force Private Limited
                 )
                 db.session.add(audit)
 
+            mode = send_result.get("mode")
+            if mode == "smtp":
+                msg_txt = f"Congratulation email and finalized document(s) sent successfully to '{app.email}' via live SMTP."
+            else:
+                msg_txt = (
+                    f"Email packaged and saved to local storage in emulated mode ({send_result.get('log_path', '')}). "
+                    "To send live emails, please configure SMTP_HOST, SMTP_PORT, SMTP_USERNAME, and SMTP_PASSWORD in backend/.env."
+                )
+
             return {
                 "success": True,
-                "message": f"Letters dispatched successfully to '{app.email}'.",
+                "message": msg_txt,
                 "recipient": app.email,
                 "sent_at": now.isoformat(),
-                "delivery_mode": send_result.get("mode"),
+                "delivery_mode": mode,
                 "document_scope": document_scope,
             }
         except Exception as e:
@@ -1493,3 +2012,182 @@ Fiber Force Private Limited
                     offer_letter.email_error = str(e)
 
             raise ValidationError(f"Failed to email letters to '{app.email}': {str(e)}")
+
+    @staticmethod
+    def preview_congratulations_email(
+        application_id: uuid.UUID,
+        user: Any,
+        document_scope: str = "both",
+    ) -> Dict[str, Any]:
+        """Generate email preview payload for HR review prior to sending."""
+        app = db.session.execute(
+            select(CandidateApplication).where(CandidateApplication.id == application_id)
+        ).scalar_one_or_none()
+
+        if not app:
+            raise NotFoundError("Application record not found.")
+
+        if app.status != APPLICATION_STATUS_APPROVED:
+            raise ValidationError(
+                f"Candidate application '{app.application_number}' has status '{app.status}'. "
+                "Letters can only be previewed for APPROVED candidates."
+            )
+
+        include_loi = document_scope in ("both", TEMPLATE_TYPE_LOI, "loi")
+        include_offer = document_scope in ("both", TEMPLATE_TYPE_OFFER, "offer")
+
+        attachments = []
+        safe_cand_name = app.full_name.replace(" ", "_")
+
+        if include_loi:
+            attachments.append({
+                "filename": f"Letter_of_Intent_{safe_cand_name}.pdf",
+            })
+        if include_offer:
+            attachments.append({
+                "filename": f"Offer_Letter_{safe_cand_name}.pdf",
+            })
+
+        subject, html_body, text_body = EmailService.render_congratulations_email(
+            candidate_name=app.full_name,
+            application_number=app.application_number,
+            registered_email=app.email,
+            role_applied=app.role_applied or "Candidate",
+            attachments=attachments,
+        )
+
+        return {
+            "subject": subject,
+            "html": html_body,
+            "text": text_body,
+            "recipient": app.email,
+            "candidate_name": app.full_name,
+            "application_number": app.application_number,
+            "role_applied": app.role_applied or "Candidate",
+            "attachments": [a["filename"] for a in attachments],
+        }
+
+    @staticmethod
+    def accept_candidate_offer(
+        application_id: uuid.UUID,
+        user: User,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Candidate accepts the formal offer letter and agreement.
+        
+        Saves acceptance timestamp and metadata, validates authorization,
+        prevents duplicate submissions, and logs the event to AuditLog.
+        """
+        app = db.session.execute(
+            select(CandidateApplication).where(CandidateApplication.id == application_id)
+        ).scalar_one_or_none()
+
+        if not app:
+            raise NotFoundError("Application record not found.")
+
+        # Security check: User must be the candidate who owns the application or an authorized admin
+        user_roles = getattr(user, "role_names", []) or []
+        is_candidate_owner = (app.user_id == user.id)
+        if not is_candidate_owner and "admin" not in user_roles:
+            raise ForbiddenError("You are not authorized to accept this offer.")
+
+        if app.status not in (APPLICATION_STATUS_APPROVED, APPLICATION_STATUS_OFFER_ACCEPTED):
+            raise ValidationError(
+                f"Candidate application '{app.application_number}' has status '{app.status}'. "
+                "Offers can only be accepted for approved applications."
+            )
+
+        # Retrieve offer letter
+        offer_letter = db.session.execute(
+            select(CandidateLetter)
+            .where(CandidateLetter.application_id == app.id)
+            .where(CandidateLetter.letter_type == TEMPLATE_TYPE_OFFER)
+            .order_by(CandidateLetter.version.desc(), CandidateLetter.created_at.desc())
+        ).scalars().first()
+
+        if not offer_letter:
+            raise ValidationError("No formal Offer Letter found awaiting acceptance for this candidate.")
+
+        # Check if already accepted to prevent duplicate events and repeat writes
+        if offer_letter.status == LETTER_STATUS_ACCEPTED or app.offer_accepted_at is not None:
+            accepted_dt = offer_letter.accepted_at or app.offer_accepted_at
+            accepted_time_str = accepted_dt.strftime("%d %b %Y, %I:%M %p") if accepted_dt else "previously"
+            return {
+                "success": True,
+                "already_accepted": True,
+                "message": f"This offer has already been accepted on {accepted_time_str}.",
+                "application_id": str(app.id),
+                "application_number": app.application_number,
+                "candidate_name": app.full_name,
+                "offer_reference": (offer_letter.field_values or {}).get("reference_number") or app.application_number,
+                "status": "ACCEPTED",
+                "accepted_at": accepted_dt.isoformat() if accepted_dt else utc_now().isoformat(),
+            }
+
+        now = utc_now()
+        offer_ref = (offer_letter.field_values or {}).get("reference_number") or app.application_number
+
+        with atomic():
+            # Update offer letter
+            offer_letter.status = LETTER_STATUS_ACCEPTED
+            offer_letter.accepted_at = now
+            offer_letter.accepted_by_id = user.id
+            offer_letter.accepted_ip = ip_address
+            offer_letter.accepted_user_agent = user_agent
+
+            # Also update LOI status if present
+            loi_letter = db.session.execute(
+                select(CandidateLetter)
+                .where(CandidateLetter.application_id == app.id)
+                .where(CandidateLetter.letter_type == TEMPLATE_TYPE_LOI)
+                .order_by(CandidateLetter.version.desc(), CandidateLetter.created_at.desc())
+            ).scalars().first()
+            if loi_letter and loi_letter.status != LETTER_STATUS_ACCEPTED:
+                loi_letter.status = LETTER_STATUS_ACCEPTED
+                loi_letter.accepted_at = now
+                loi_letter.accepted_by_id = user.id
+                loi_letter.accepted_ip = ip_address
+                loi_letter.accepted_user_agent = user_agent
+
+            # Update application record
+            app.offer_accepted_at = now
+            app.offer_accepted_by_id = user.id
+            app.offer_acceptance_status = "ACCEPTED"
+            app.status = APPLICATION_STATUS_OFFER_ACCEPTED
+
+            # Write server-side audit event matching requirements
+            audit = AuditLog(
+                action="CANDIDATE_OFFER_ACCEPTED",
+                user_id=user.id,
+                resource="candidate_applications",
+                resource_id=str(app.id),
+                ip_address=ip_address,
+                user_agent=user_agent,
+                details={
+                    "activity": "Candidate Accepted Offer",
+                    "status": "Accepted",
+                    "candidate_name": app.full_name,
+                    "application_number": app.application_number,
+                    "offer_reference": offer_ref,
+                    "letter_id": str(offer_letter.id),
+                    "accepted_at": now.isoformat(),
+                    "actor_email": user.email,
+                    "actor_name": user.full_name or app.full_name,
+                },
+            )
+            db.session.add(audit)
+
+        return {
+            "success": True,
+            "already_accepted": False,
+            "message": "Offer accepted successfully. Welcome to the team!",
+            "application_id": str(app.id),
+            "application_number": app.application_number,
+            "candidate_name": app.full_name,
+            "offer_reference": offer_ref,
+            "status": "ACCEPTED",
+            "accepted_at": now.isoformat(),
+        }
+
+

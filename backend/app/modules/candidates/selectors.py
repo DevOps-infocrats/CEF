@@ -8,11 +8,11 @@ from app.modules.candidates.models import CandidateApplication, CandidateDocumen
 
 def _base_application_query():
     """Base query for CandidateApplication with eagerly loaded relationships to prevent N+1 queries."""
+    from sqlalchemy.orm import raiseload
     return (
         select(CandidateApplication)
         .options(
-            joinedload(CandidateApplication.reviewed_by),
-            joinedload(CandidateApplication.user),
+            joinedload(CandidateApplication.reviewed_by).options(raiseload("*")),
             selectinload(CandidateApplication.verification_items),
             selectinload(CandidateApplication.documents),
             selectinload(CandidateApplication.selected_districts),

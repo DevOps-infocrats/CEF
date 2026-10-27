@@ -5,12 +5,14 @@ ROLE_SUPER_ADMIN = "admin"
 ROLE_OFFICER = "reviewer"
 ROLE_APPLICANT = "candidate"
 ROLE_AUDITOR = "auditor"
+ROLE_STAFF = "staff"
 
 ALL_ROLES = [
     ROLE_SUPER_ADMIN,
     ROLE_OFFICER,
     ROLE_APPLICANT,
     ROLE_AUDITOR,
+    ROLE_STAFF,
 ]
 
 # Granular Permission Scopes / Identifiers
@@ -215,6 +217,14 @@ ROLE_PERMISSIONS = {
         SCOPE_AUTH_READ,
         SCOPE_AUDIT_READ,
         SCOPE_CANDIDATES_READ,
+    ],
+    ROLE_STAFF: [
+        SCOPE_PORTAL_ACCESS,
+        SCOPE_AUTH_READ,
+        SCOPE_CANDIDATES_READ,
+        SCOPE_CANDIDATES_CREATE,
+        SCOPE_CANDIDATES_EDIT,
+        SCOPE_CANDIDATES_SUBMIT,
     ],
 }
 

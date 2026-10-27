@@ -238,6 +238,62 @@ def update_candidate_letter(app_id: str, letter_type: str):
     )
 
 
+@letters_bp.route("/applications/<string:app_id>/joining-date", methods=["PATCH", "PUT"])
+@require_auth
+def update_joining_date(app_id: str):
+    """Update candidate joining date across applications and generated letter drafts."""
+    user = g.current_user
+    app_uuid = _resolve_uuid(app_id)
+
+    user_roles = getattr(user, "role_names", []) or []
+    can_edit = (
+        AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:edit")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:write")
+        or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or AuthorizationEvaluator.has_required_permission(user, "letters:generate")
+        or "admin" in user_roles
+    )
+    if not can_edit:
+        raise ForbiddenError("Missing required permission to edit candidate joining date.")
+
+    data = request.get_json(silent=True) or {}
+    raw_date = data.get("joining_date")
+    if not raw_date or not str(raw_date).strip():
+        raise ValidationError("Field 'joining_date' is required.")
+
+    normalized_date = LetterGenerationService.validate_and_normalize_joining_date(str(raw_date))
+
+    from app.modules.candidates.models import CandidateApplication
+    from app.extensions import db
+    app_obj = db.session.get(CandidateApplication, app_uuid)
+    if not app_obj:
+        raise NotFoundError("Candidate application not found.")
+
+    app_obj.joining_date = normalized_date
+
+    # Ensure letter drafts exist and update LOI and Offer letter
+    LetterGenerationService.get_or_create_candidate_letters(app_uuid, user)
+    updated_loi = LetterGenerationService.update_letter_draft(
+        application_id=app_uuid,
+        letter_type=TEMPLATE_TYPE_LOI,
+        field_values={"joining_date": normalized_date},
+        user=user,
+    )
+
+    db.session.commit()
+
+    return api_response(
+        data={
+            "application_id": str(app_obj.id),
+            "joining_date": normalized_date,
+            "letter_of_intent": LetterGenerationService._serialize_letter(updated_loi),
+        },
+        message=f"Joining Date updated successfully to {normalized_date}.",
+        status_code=200,
+    )
+
+
 @letters_bp.route("/applications/<string:app_id>/letters/<string:letter_type>/download", methods=["GET"])
 @require_auth
 def download_candidate_letter(app_id: str, letter_type: str):
@@ -264,10 +320,8 @@ def download_candidate_letter(app_id: str, letter_type: str):
         if app_obj.user_id != user.id:
             raise ForbiddenError("You are not authorized to download letters for this application.")
 
-    letters_data = LetterGenerationService.get_or_create_candidate_letters(app_uuid, user)
-    cand_app = letters_data["application"]
-
     from app.modules.letters.models import CandidateLetter
+    from app.modules.candidates.models import CandidateApplication
     from sqlalchemy import select
     from app.extensions import db
 
@@ -278,32 +332,53 @@ def download_candidate_letter(app_id: str, letter_type: str):
         .order_by(CandidateLetter.version.desc(), CandidateLetter.created_at.desc())
     ).scalars().first()
 
+    cand_app_obj = None
+    if not letter:
+        letters_data = LetterGenerationService.get_or_create_candidate_letters(app_uuid, user)
+        cand_app = letters_data.get("application", {})
+        safe_name = (cand_app.get("full_name") or "candidate").replace(" ", "_")
+        letter = db.session.execute(
+            select(CandidateLetter)
+            .where(CandidateLetter.application_id == app_uuid)
+            .where(CandidateLetter.letter_type == letter_type)
+            .order_by(CandidateLetter.version.desc(), CandidateLetter.created_at.desc())
+        ).scalars().first()
+    else:
+        cand_app_obj = db.session.get(CandidateApplication, app_uuid)
+        safe_name = (cand_app_obj.full_name if cand_app_obj else "candidate").replace(" ", "_")
+
     if not letter:
         raise NotFoundError("Letter not found.")
-
-    safe_name = cand_app["full_name"].replace(" ", "_")
 
     is_inline = request.args.get("inline", "0").lower() in ("1", "true", "yes")
 
     if doc_format == "pdf":
         pdf_path = LetterGenerationService.get_or_render_pdf(letter)
         if pdf_path.endswith(".pdf") and os.path.exists(pdf_path):
-            return send_file(
+            resp = send_file(
                 pdf_path,
                 as_attachment=not is_inline,
                 download_name=f"{letter_type}_{safe_name}.pdf",
                 mimetype="application/pdf",
+                conditional=True,
+                max_age=3600,
             )
+            resp.headers["Cache-Control"] = "private, max-age=3600"
+            return resp
 
     if not os.path.exists(letter.docx_storage_path):
         raise NotFoundError("DOCX file not found on disk.")
 
-    return send_file(
+    resp = send_file(
         letter.docx_storage_path,
         as_attachment=True,
         download_name=f"{letter_type}_{safe_name}.docx",
         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        conditional=True,
+        max_age=3600,
     )
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
 
 
 @letters_bp.route("/applications/<string:app_id>/letters/send", methods=["POST"])
@@ -337,3 +412,92 @@ def send_candidate_letters(app_id: str):
         message=result["message"],
         status_code=200,
     )
+
+
+@letters_bp.route("/applications/<string:app_id>/letters/email-preview", methods=["GET"])
+@require_auth
+def preview_candidate_email(app_id: str):
+    """Preview the exact congratulation email to be sent to an approved candidate."""
+    user = g.current_user
+
+    if not (
+        AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:read")
+        or AuthorizationEvaluator.has_required_permission(user, "documents:view")
+        or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or "admin" in (user.roles or [])
+    ):
+        raise ForbiddenError("You are not authorized to preview candidate letters.")
+
+    app_uuid = _resolve_uuid(app_id)
+    document_scope = request.args.get("document_scope", "both").lower()
+
+    preview_data = LetterGenerationService.preview_congratulations_email(
+        application_id=app_uuid,
+        user=user,
+        document_scope=document_scope,
+    )
+
+    return api_response(
+        data=preview_data,
+        message="Congratulation email preview generated successfully.",
+        status_code=200,
+    )
+
+
+@letters_bp.route("/letters/smtp-status", methods=["GET"])
+@require_auth
+def get_smtp_status():
+    """Check current SMTP configuration status and test connection."""
+    user = g.current_user
+    user_roles = user.role_names if hasattr(user, "role_names") else (user.roles or [])
+    if not (
+        AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
+        or AuthorizationEvaluator.has_required_permission(user, "letters:generate")
+        or "admin" in user_roles
+    ):
+        raise ForbiddenError("Only authorized personnel may inspect SMTP configuration.")
+
+    test_to = request.args.get("test_email")
+    from app.modules.letters.services import EmailService
+    result = EmailService.test_smtp_connection(to_test_email=test_to)
+    return api_response(
+        data=result,
+        message=result["message"],
+        status_code=200,
+    )
+
+
+def _get_client_metadata() -> tuple[str, str]:
+    """Extract client IP and user-agent from request."""
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown")
+    if "," in ip:
+        ip = ip.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "unknown")[:250]
+    return ip, user_agent
+
+
+@letters_bp.route("/applications/<string:app_id>/letters/accept", methods=["POST"])
+@require_auth
+def accept_candidate_offer(app_id: str):
+    """Candidate accepts the formal offer letter and agreement."""
+    user = g.current_user
+    app_uuid = _resolve_uuid(app_id)
+    ip_address, user_agent = _get_client_metadata()
+
+    result = LetterGenerationService.accept_candidate_offer(
+        application_id=app_uuid,
+        user=user,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+    return api_response(
+        data=result,
+        message=result["message"],
+        status_code=200,
+    )
+
+
+
