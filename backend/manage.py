@@ -15,6 +15,15 @@ def main():
         print(f"\n>> Starting Clean Energy Fund (CEF) Portal Backend on http://127.0.0.1:{port}\n")
         app.run(host=host, port=port, debug=app.config.get("DEBUG", True))
 
+    elif command == "migrate":
+        from alembic.config import Config
+        from alembic import command as alembic_command
+        print("\n>> Running database migrations under application context...")
+        with app.app_context():
+            alembic_cfg = Config("migrations/alembic.ini")
+            alembic_command.upgrade(alembic_cfg, "head")
+        print(">> Migrations complete!\n")
+
     elif command == "seed":
         from seed import seed_database
         seed_database()
@@ -28,7 +37,7 @@ def main():
 
     else:
         print(f"Unknown command: '{command}'")
-        print("Available commands: runserver, seed, routes")
+        print("Available commands: runserver, migrate, seed, routes")
         sys.exit(1)
 
 
