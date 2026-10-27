@@ -16,3 +16,5 @@ pytest==8.3.3
 openpyxl==3.1.5
 python-docx
 psycopg[binary]
+reportlab
+pypdf
