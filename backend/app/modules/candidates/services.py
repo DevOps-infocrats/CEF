@@ -60,6 +60,42 @@ def get_storage_base_dir() -> str:
     return os.path.abspath(base_dir)
 
 
+def resolve_document_file_path(doc: Optional[CandidateDocument]) -> Optional[str]:
+    """Resolve and verify existence of a candidate document on physical storage."""
+    if not doc:
+        return None
+
+    # 1. Direct path check if set and exists
+    if doc.file_path and os.path.exists(doc.file_path):
+        return os.path.abspath(doc.file_path)
+
+    base_dir = get_storage_base_dir()
+
+    # 2. Check canonical location: base_dir / str(user_id) / storage_filename
+    if doc.storage_filename and doc.user_id:
+        user_path = os.path.join(base_dir, str(doc.user_id), doc.storage_filename)
+        if os.path.exists(user_path):
+            return os.path.abspath(user_path)
+
+    # 3. Check directly under base_dir / storage_filename
+    if doc.storage_filename:
+        flat_path = os.path.join(base_dir, doc.storage_filename)
+        if os.path.exists(flat_path):
+            return os.path.abspath(flat_path)
+
+    # 4. Check relative to application root
+    if doc.file_path:
+        norm_path = doc.file_path.replace("/", os.sep).replace("\\", os.sep)
+        if os.path.exists(norm_path):
+            return os.path.abspath(norm_path)
+        app_rel_path = os.path.abspath(os.path.join(current_app.root_path, "..", norm_path))
+        if os.path.exists(app_rel_path):
+            return app_rel_path
+
+    return None
+
+
+
 class CandidateService:
     """Business operations and state persistence for candidate applications and documents."""
 
@@ -480,21 +516,28 @@ class CandidateService:
         ]
 
         for key, label, category, mandatory in doc_defs:
-            if category in doc_map and key not in existing_items:
+            if category in doc_map:
                 linked_doc = doc_map[category]
-                item = CandidateVerificationItem(
-                    id=uuid.uuid4(),
-                    application_id=application.id,
-                    document_id=linked_doc.id,
-                    item_key=key,
-                    item_label=label,
-                    item_category="document",
-                    is_mandatory=mandatory,
-                    status=VERIFICATION_STATUS_PENDING,
-                )
-                if not is_new:
-                    db.session.add(item)
-                created_items.append(item)
+                if key not in existing_items:
+                    item = CandidateVerificationItem(
+                        id=uuid.uuid4(),
+                        application_id=application.id,
+                        document_id=linked_doc.id,
+                        item_key=key,
+                        item_label=label,
+                        item_category="document",
+                        is_mandatory=mandatory,
+                        status=VERIFICATION_STATUS_PENDING,
+                    )
+                    if not is_new:
+                        db.session.add(item)
+                    created_items.append(item)
+                    existing_items[key] = item
+                else:
+                    # Sync document_id if missing or updated
+                    existing_item = existing_items[key]
+                    if existing_item.document_id != linked_doc.id:
+                        existing_item.document_id = linked_doc.id
 
         if not is_new and created_items:
             db.session.commit()
@@ -567,6 +610,82 @@ class CandidateService:
         return new_status
 
     @staticmethod
+    def _find_verification_item(
+        application: CandidateApplication,
+        identifier: str,
+    ) -> Optional[CandidateVerificationItem]:
+        """Find a verification item by item_key, document_id (UUID), item UUID, or category."""
+        if not identifier:
+            return None
+
+        clean_id = str(identifier).strip()
+
+        # 1. Direct item_key match
+        item = db.session.execute(
+            select(CandidateVerificationItem)
+            .where(CandidateVerificationItem.application_id == application.id)
+            .where(CandidateVerificationItem.item_key == clean_id)
+        ).scalar_one_or_none()
+        if item:
+            return item
+
+        # 2. Check if identifier is a UUID (document_id or item id)
+        try:
+            ident_uuid = uuid.UUID(clean_id)
+            # Check by document_id
+            item = db.session.execute(
+                select(CandidateVerificationItem)
+                .where(CandidateVerificationItem.application_id == application.id)
+                .where(CandidateVerificationItem.document_id == ident_uuid)
+            ).scalar_one_or_none()
+            if item:
+                return item
+            # Check by item primary key id
+            item = db.session.execute(
+                select(CandidateVerificationItem)
+                .where(CandidateVerificationItem.application_id == application.id)
+                .where(CandidateVerificationItem.id == ident_uuid)
+            ).scalar_one_or_none()
+            if item:
+                return item
+        except (ValueError, TypeError):
+            pass
+
+        # 3. Category mapping to item_key
+        cat_to_key = {
+            "aadhaar_card": "doc_aadhaar",
+            "pan_card": "doc_pan",
+            "bank_passbook": "doc_bank_passbook",
+            "cancelled_cheque": "doc_cancelled_cheque",
+            "marksheet_10th": "doc_marksheet_10th",
+            "marksheet_12th": "doc_marksheet_12th",
+            "previous_employment": "doc_previous_employment",
+        }
+        lower_id = clean_id.lower()
+        if lower_id in cat_to_key:
+            mapped_key = cat_to_key[lower_id]
+            item = db.session.execute(
+                select(CandidateVerificationItem)
+                .where(CandidateVerificationItem.application_id == application.id)
+                .where(CandidateVerificationItem.item_key == mapped_key)
+            ).scalar_one_or_none()
+            if item:
+                return item
+
+        # 4. If identifier had "doc_" prefix stripped or added
+        if not lower_id.startswith("doc_"):
+            candidate_key = f"doc_{lower_id}"
+            item = db.session.execute(
+                select(CandidateVerificationItem)
+                .where(CandidateVerificationItem.application_id == application.id)
+                .where(CandidateVerificationItem.item_key == candidate_key)
+            ).scalar_one_or_none()
+            if item:
+                return item
+
+        return None
+
+    @staticmethod
     def mark_verification_item(
         application_id: uuid.UUID,
         item_key: str,
@@ -586,22 +705,51 @@ class CandidateService:
         # Ensure checklist exists (in case older record)
         CandidateService.initialize_verification_checklist(application)
 
-        item = db.session.execute(
-            select(CandidateVerificationItem)
-            .where(CandidateVerificationItem.application_id == application.id)
-            .where(CandidateVerificationItem.item_key == item_key)
-        ).scalar_one_or_none()
-
+        item = CandidateService._find_verification_item(application, item_key)
         if not item:
             raise NotFoundError(f"Verification item '{item_key}' not found.")
 
-        # If document item, verify that file exists
-        if item.item_key.startswith("doc_"):
+        # If document item, verify that file exists, belongs to application, and is valid
+        if item.item_key.startswith("doc_") or item.item_category == "document":
+            cat_map = {
+                "doc_aadhaar": "aadhaar_card",
+                "doc_pan": "pan_card",
+                "doc_bank_passbook": "bank_passbook",
+                "doc_cancelled_cheque": "cancelled_cheque",
+                "doc_marksheet_10th": "marksheet_10th",
+                "doc_marksheet_12th": "marksheet_12th",
+                "doc_previous_employment": "previous_employment",
+            }
+            target_cat = cat_map.get(item.item_key)
+
+            # Auto-link document_id from application documents if missing or unlinked
+            if not item.document_id and target_cat:
+                matching_doc = next(
+                    (d for d in application.documents if d.category == target_cat),
+                    None
+                )
+                if matching_doc:
+                    item.document_id = matching_doc.id
+
             if not item.document_id:
-                raise ValidationError("Cannot verify document: no document file associated with this item.")
+                raise ValidationError(f"Cannot verify document: no {item.item_label} file uploaded for this candidate application.")
+
             doc = db.session.get(CandidateDocument, item.document_id)
-            if not doc or not os.path.exists(doc.file_path):
-                raise ValidationError("Cannot verify document: file is missing or not found on storage.")
+            if not doc:
+                raise ValidationError("Cannot verify document: associated document record was not found.")
+
+            # Security validation: document must belong to this application/user
+            if doc.application_id is not None and doc.application_id != application.id:
+                raise ValidationError("Security violation: document does not belong to this candidate application.")
+            if doc.user_id != application.user_id:
+                raise ValidationError("Security violation: document user does not match application candidate.")
+
+            resolved_path = resolve_document_file_path(doc)
+            if not resolved_path:
+                raise ValidationError(f"Cannot verify document: '{doc.original_filename}' file is missing or not found on storage.")
+
+            if doc.file_path != resolved_path:
+                doc.file_path = resolved_path
         else:
             # Submitted data checklist item: validate that the required candidate fields are present
             if item.item_key == "personal_info":
@@ -674,12 +822,7 @@ class CandidateService:
         if not application:
             raise NotFoundError("Application record not found.")
 
-        item = db.session.execute(
-            select(CandidateVerificationItem)
-            .where(CandidateVerificationItem.application_id == application.id)
-            .where(CandidateVerificationItem.item_key == item_key)
-        ).scalar_one_or_none()
-
+        item = CandidateService._find_verification_item(application, item_key)
         if not item:
             raise NotFoundError(f"Verification item '{item_key}' not found.")
 
@@ -743,6 +886,16 @@ class CandidateService:
             ).scalars().all()
         )
 
+        cat_map = {
+            "doc_aadhaar": "aadhaar_card",
+            "doc_pan": "pan_card",
+            "doc_bank_passbook": "bank_passbook",
+            "doc_cancelled_cheque": "cancelled_cheque",
+            "doc_marksheet_10th": "marksheet_10th",
+            "doc_marksheet_12th": "marksheet_12th",
+            "doc_previous_employment": "previous_employment",
+        }
+
         eligible_items: list[CandidateVerificationItem] = []
         ineligible_items: list[dict[str, str]] = []
 
@@ -765,6 +918,16 @@ class CandidateService:
                 continue
 
             if is_doc_item:
+                # Auto-link document_id from application documents if missing
+                if not item.document_id:
+                    target_cat = cat_map.get(item.item_key)
+                    matching_doc = next(
+                        (d for d in application.documents if d.category == target_cat),
+                        None
+                    )
+                    if matching_doc:
+                        item.document_id = matching_doc.id
+
                 # Must have document_id and valid file on storage
                 if not item.document_id:
                     ineligible_items.append({
@@ -773,14 +936,43 @@ class CandidateService:
                         "reason": "Missing document upload",
                     })
                     continue
+
                 doc = db.session.get(CandidateDocument, item.document_id)
-                if not doc or not os.path.exists(doc.file_path):
+                if not doc:
                     ineligible_items.append({
                         "item_key": item.item_key,
                         "item_label": item.item_label,
-                        "reason": "Document file is inaccessible or missing on disk",
+                        "reason": "Document record not found",
                     })
                     continue
+
+                # Security check
+                if doc.application_id is not None and doc.application_id != application.id:
+                    ineligible_items.append({
+                        "item_key": item.item_key,
+                        "item_label": item.item_label,
+                        "reason": "Document does not belong to this application",
+                    })
+                    continue
+                if doc.user_id != application.user_id:
+                    ineligible_items.append({
+                        "item_key": item.item_key,
+                        "item_label": item.item_label,
+                        "reason": "Document user does not match application candidate",
+                    })
+                    continue
+
+                resolved_path = resolve_document_file_path(doc)
+                if not resolved_path:
+                    ineligible_items.append({
+                        "item_key": item.item_key,
+                        "item_label": item.item_label,
+                        "reason": f"File '{doc.original_filename}' is missing on storage",
+                    })
+                    continue
+
+                if doc.file_path != resolved_path:
+                    doc.file_path = resolved_path
             else:
                 # Detail item validation: check that required fields exist
                 if item.item_key == "personal_info":

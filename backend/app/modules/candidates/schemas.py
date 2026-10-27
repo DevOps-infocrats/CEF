@@ -63,6 +63,7 @@ class UpdateVerificationItemSchema(Schema):
     """Payload schema for updating a verification checklist item."""
 
     remarks = fields.String(required=False, allow_none=True, validate=validate.Length(max=500))
+    document_id = fields.UUID(required=False, allow_none=True)
 
 
 class RejectCandidateSchema(Schema):
@@ -389,6 +390,7 @@ class CandidateApplicationResponseSchema(Schema):
     current_salary = fields.Decimal(as_string=True, dump_only=True)
     asking_salary = fields.Decimal(as_string=True, dump_only=True)
     negotiated_salary = fields.Decimal(as_string=True, dump_only=True, allow_none=True)
+    joining_date = fields.String(dump_only=True, allow_none=True)
 
     # Step 5: Uploaded Documents
     documents = fields.Nested(CandidateDocumentResponseSchema, many=True, dump_only=True)

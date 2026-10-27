@@ -35,6 +35,12 @@ def create_app(config_class=None) -> Flask:
     )
 
     is_prod = app.config.get("ENV") == "production"
+    if is_prod:
+        if app.config.get("SECRET_KEY") in ("insecure-dev-secret-key-change-me", "", None):
+            raise ValueError("Production requires a securely configured SECRET_KEY environment variable.")
+        if app.config.get("JWT_SECRET_KEY") in ("insecure-jwt-secret-key-change-me", "", None):
+            raise ValueError("Production requires a securely configured JWT_SECRET_KEY environment variable.")
+
     talisman.init_app(
         app,
         force_https=is_prod,

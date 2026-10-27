@@ -1,9 +1,13 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, Index, Text, JSON, Uuid, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.extensions import db
+
+if TYPE_CHECKING:
+    from app.modules.auth.models import User
+    from app.modules.candidates.models import CandidateApplication
 
 
 def utc_now() -> datetime:
@@ -17,6 +21,7 @@ VALID_TEMPLATE_TYPES = {TEMPLATE_TYPE_LOI, TEMPLATE_TYPE_OFFER}
 LETTER_STATUS_DRAFT = "DRAFT"
 LETTER_STATUS_FINAL = "FINAL"
 LETTER_STATUS_SENT = "SENT"
+LETTER_STATUS_ACCEPTED = "ACCEPTED"
 LETTER_STATUS_FAILED = "FAILED"
 
 DEFAULT_LOI_MAPPINGS = [
@@ -87,6 +92,29 @@ class DocumentTemplate(db.Model):
         Index("idx_doc_template_active_type", "template_type", "is_active"),
     )
 
+    def __init__(
+        self,
+        template_type: str,
+        name: str,
+        filename: str,
+        storage_path: str,
+        version: int = 1,
+        is_active: bool = True,
+        field_mappings: Optional[Any] = None,
+        created_by_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
+    ):
+        self.template_type = template_type
+        self.name = name
+        self.filename = filename
+        self.storage_path = storage_path
+        self.version = version
+        self.is_active = is_active
+        self.field_mappings = field_mappings
+        self.created_by_id = created_by_id
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
 
 class CandidateLetter(db.Model):
     """Database model for candidate-specific generated letters, drafts, and dispatch tracking."""
@@ -139,6 +167,18 @@ class CandidateLetter(db.Model):
     email_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     email_error: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
 
+    accepted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    accepted_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    accepted_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    accepted_user_agent: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
@@ -156,8 +196,55 @@ class CandidateLetter(db.Model):
     template: Mapped[Optional["DocumentTemplate"]] = relationship("DocumentTemplate")
     last_edited_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[last_edited_by_id])
     sent_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[sent_by_id])
+    accepted_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[accepted_by_id])
 
     __table_args__ = (
         UniqueConstraint("application_id", "letter_type", name="uq_candidate_letter_app_type"),
         Index("idx_candidate_letter_app_type", "application_id", "letter_type"),
     )
+
+    def __init__(
+        self,
+        application_id: uuid.UUID,
+        letter_type: str,
+        docx_storage_path: str,
+        template_id: Optional[uuid.UUID] = None,
+        version: int = 1,
+        status: str = LETTER_STATUS_DRAFT,
+        pdf_storage_path: Optional[str] = None,
+        field_values: Optional[Any] = None,
+        last_edited_by_id: Optional[uuid.UUID] = None,
+        last_edited_at: Optional[datetime] = None,
+        sent_at: Optional[datetime] = None,
+        sent_by_id: Optional[uuid.UUID] = None,
+        email_recipient: Optional[str] = None,
+        email_status: Optional[str] = None,
+        email_error: Optional[str] = None,
+        accepted_at: Optional[datetime] = None,
+        accepted_by_id: Optional[uuid.UUID] = None,
+        accepted_ip: Optional[str] = None,
+        accepted_user_agent: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        self.application_id = application_id
+        self.letter_type = letter_type
+        self.docx_storage_path = docx_storage_path
+        self.template_id = template_id
+        self.version = version
+        self.status = status
+        self.pdf_storage_path = pdf_storage_path
+        self.field_values = field_values
+        self.last_edited_by_id = last_edited_by_id
+        self.last_edited_at = last_edited_at
+        self.sent_at = sent_at
+        self.sent_by_id = sent_by_id
+        self.email_recipient = email_recipient
+        self.email_status = email_status
+        self.email_error = email_error
+        self.accepted_at = accepted_at
+        self.accepted_by_id = accepted_by_id
+        self.accepted_ip = accepted_ip
+        self.accepted_user_agent = accepted_user_agent
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+

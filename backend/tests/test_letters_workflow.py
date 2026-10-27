@@ -678,3 +678,131 @@ def test_offer_letter_in_place_editing_persists_and_isolates(client):
     assert master_hash_before == master_hash_after, "Master Offer Letter template was altered!"
 
 
+def test_congratulations_email_html_design_and_preview(client):
+    """Test Congratulations Email preview and template fidelity with approved HTML design."""
+    approver = create_user("preview_officer@example.com", "Pass@1234", ["candidates:approve", "documents:view"])
+    headers = login(client, "preview_officer@example.com", "Pass@1234")
+
+    cand_user = create_user("cand_preview@example.com", "Pass@1234", ["portal:access"], role="candidate")
+    approved_app = create_test_application(cand_user, status=APPLICATION_STATUS_APPROVED)
+
+    # 1. Preview email for approved candidate
+    resp = client.get(f"/api/v1/applications/{approved_app.id}/letters/email-preview?document_scope=both", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json["data"]
+
+    # Subject verification
+    assert data["subject"] == "Congratulations on Your Selection | CEF Portal"
+    assert data["recipient"] == "rajesh.kumar@example.com"
+    assert data["candidate_name"] == "Rajesh Kumar Sharma"
+    assert len(data["attachments"]) == 2
+
+    # HTML content checks matching approved design
+    html = data["html"]
+    assert "Congratulations, Rajesh Kumar Sharma!" in html
+    assert "Your application has been approved by our HR team." in html
+    assert "OFFICIAL SELECTION &amp; APPROVAL" in html or "OFFICIAL SELECTION" in html
+    assert "Your Documents" in html
+    assert "Letter of Intent" in html
+    assert "Formal Offer Letter" in html
+    assert "Human Resources Team" in html
+    assert "CEF Portal" in html
+    assert "Candidate Recruitment &amp; HR Operations" in html
+    assert "rajesh.kumar@example.com" in html
+
+    # Text content check
+    text = data["text"]
+    assert "Congratulations on your selection!" in text
+    assert "Human Resources Team" in text
+
+    # 2. Block preview for unapproved candidate
+    pending_user = create_user("pending_cand@example.com", "Pass@1234", ["portal:access"], role="candidate")
+    pending_app = create_test_application(pending_user, status=APPLICATION_STATUS_PENDING)
+    resp_pending = client.get(f"/api/v1/applications/{pending_app.id}/letters/email-preview", headers=headers)
+    assert resp_pending.status_code == 400
+    assert "APPROVED" in resp_pending.json["message"]
+
+
+def test_edit_candidate_joining_date_and_permissions(client):
+    """Test authorized joining date editing, validation, persistence, and RBAC permissions."""
+    # 1. Setup authorized HR user and candidate
+    approver = create_user("joining_hr@example.com", "Pass@1234", ["candidates:approve", "documents:view"])
+    hr_headers = login(client, "joining_hr@example.com", "Pass@1234")
+
+    unauthorized_user = create_user("joining_unauth@example.com", "Pass@1234", ["portal:access", "candidates:read"], role="candidate")
+    unauth_headers = login(client, "joining_unauth@example.com", "Pass@1234")
+
+    cand_user = create_user("cand_joining_target@example.com", "Pass@1234", ["portal:access"], role="candidate")
+    approved_app = create_test_application(cand_user, status=APPLICATION_STATUS_APPROVED)
+
+    # Candidate does not yet have a joining date initially
+    resp_init = client.get(f"/api/v1/applications/{approved_app.id}/letters", headers=hr_headers)
+    assert resp_init.status_code == 200
+    init_data = resp_init.json["data"]
+    assert init_data["letter_of_intent"]["field_values"].get("joining_date", "") == ""
+
+    # 2. Unauthorized user cannot update joining date -> 403 Forbidden
+    resp_unauth = client.patch(
+        f"/api/v1/applications/{approved_app.id}/letters/letter_of_intent",
+        headers=unauth_headers,
+        json={"field_values": {"joining_date": "20/11/2026"}},
+    )
+    assert resp_unauth.status_code == 403
+
+    resp_unauth_direct = client.patch(
+        f"/api/v1/applications/{approved_app.id}/joining-date",
+        headers=unauth_headers,
+        json={"joining_date": "20/11/2026"},
+    )
+    assert resp_unauth_direct.status_code == 403
+
+    # 3. Invalid date validation -> 400 ValidationError, preserves existing state
+    resp_invalid = client.patch(
+        f"/api/v1/applications/{approved_app.id}/letters/letter_of_intent",
+        headers=hr_headers,
+        json={"field_values": {"joining_date": "invalid-date-format"}},
+    )
+    assert resp_invalid.status_code == 400
+
+    resp_invalid_day = client.patch(
+        f"/api/v1/applications/{approved_app.id}/joining-date",
+        headers=hr_headers,
+        json={"joining_date": "35/11/2026"},
+    )
+    assert resp_invalid_day.status_code == 400
+
+    # 4. Authorized user sets new joining date via existing letters API
+    resp_set = client.patch(
+        f"/api/v1/applications/{approved_app.id}/letters/letter_of_intent",
+        headers=hr_headers,
+        json={"field_values": {"joining_date": "18/11/2026"}},
+    )
+    assert resp_set.status_code == 200
+    assert resp_set.json["data"]["field_values"]["joining_date"] == "18/11/2026"
+
+    # 5. Verify persistence after fresh fetch (relocking/refreshing)
+    resp_refresh = client.get(f"/api/v1/applications/{approved_app.id}/letters", headers=hr_headers)
+    assert resp_refresh.status_code == 200
+    refreshed_data = resp_refresh.json["data"]
+    assert refreshed_data["letter_of_intent"]["field_values"]["joining_date"] == "18/11/2026"
+    assert refreshed_data["offer_letter"]["field_values"]["joining_date"] == "18/11/2026"
+    assert refreshed_data["application"]["joining_date"] == "18/11/2026"
+
+    # 6. Authorized user updates joining date using YYYY-MM-DD input format (auto-normalized)
+    resp_update_norm = client.patch(
+        f"/api/v1/applications/{approved_app.id}/joining-date",
+        headers=hr_headers,
+        json={"joining_date": "2026-12-01"},
+    )
+    assert resp_update_norm.status_code == 200
+    assert resp_update_norm.json["data"]["joining_date"] == "01/12/2026"
+
+    # Verify both letters and candidate reflect the updated date
+    resp_final = client.get(f"/api/v1/applications/{approved_app.id}/letters", headers=hr_headers)
+    assert resp_final.json["data"]["letter_of_intent"]["field_values"]["joining_date"] == "01/12/2026"
+    assert resp_final.json["data"]["offer_letter"]["field_values"]["joining_date"] == "01/12/2026"
+    assert resp_final.json["data"]["application"]["joining_date"] == "01/12/2026"
+
+
+
+

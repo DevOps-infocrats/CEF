@@ -49,6 +49,7 @@ export interface CandidateLettersData {
     district: string;
     circle: string;
     current_state: string;
+    joining_date?: string | null;
     negotiated_salary?: number | null;
   };
   letter_of_intent: CandidateLetterDto;

@@ -9,7 +9,7 @@ export const useVerificationApplications = () => {
   return useQuery({
     queryKey: VERIFICATION_LIST_QUERY_KEY,
     queryFn: () => verificationService.getApplications(),
-    staleTime: 1000 * 30, // 30 seconds
+    staleTime: 1000 * 60, // 60 seconds
   });
 };
 

@@ -9,8 +9,11 @@ import {
   useUpdateCandidateLetter,
   useSendCandidateLetters,
 } from '../hooks/useLetters';
+import { letterService } from '../services/letterService';
 import { InteractiveLetterOfIntent, LoiLetterContent } from '../components/InteractiveLetterOfIntent';
 import { InteractiveOfferLetter, OfferLetterContent } from '../components/InteractiveOfferLetter';
+import { GlassInput } from '@/components/GlassInput';
+import { useCurrentUser } from '@/features/auth/hooks/useAuth';
 import {
   FileText,
   FileCheck2,
@@ -28,6 +31,7 @@ import {
   RotateCw,
   FileCode,
   Edit3,
+  Calendar,
 } from 'lucide-react';
 
 export const CandidateLetterReviewPage: React.FC = () => {
@@ -43,6 +47,18 @@ export const CandidateLetterReviewPage: React.FC = () => {
   const [viewMode, setViewMode] = useState<'interactive' | 'pdf'>('interactive');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // User authorization
+  const { data: currentUser } = useCurrentUser();
+  const userRoles = currentUser?.roles || [];
+  const permissions = currentUser?.permissions || [];
+  const isAdmin = userRoles.includes('admin') || permissions.includes('users:manage');
+  const canEdit =
+    isAdmin ||
+    permissions.includes('candidates:approve') ||
+    permissions.includes('candidates:edit') ||
+    permissions.includes('candidates:write') ||
+    permissions.includes('letters:generate');
+
   // Candidate field values
   const [loiFields, setLoiFields] = useState<Record<string, any>>({});
   const [offerFields, setOfferFields] = useState<Record<string, any>>({});
@@ -54,6 +70,12 @@ export const CandidateLetterReviewPage: React.FC = () => {
   const [offerTextEdits, setOfferTextEdits] = useState<Record<string, string>>({});
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
 
+  // Joining Date Edit Modal State
+  const [isJoiningDateModalOpen, setIsJoiningDateModalOpen] = useState<boolean>(false);
+  const [joiningDateInput, setJoiningDateInput] = useState<string>('');
+  const [joiningDateError, setJoiningDateError] = useState<string | null>(null);
+  const [isSavingJoiningDate, setIsSavingJoiningDate] = useState<boolean>(false);
+
   // PDF Preview State
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const [isPdfLoading, setIsPdfLoading] = useState<boolean>(false);
@@ -62,6 +84,42 @@ export const CandidateLetterReviewPage: React.FC = () => {
   const [isSendModalOpen, setIsSendModalOpen] = useState<boolean>(false);
   const [confirmCheckbox, setConfirmCheckbox] = useState<boolean>(false);
   const [sendScope, setSendScope] = useState<'both' | 'letter_of_intent' | 'offer_letter'>('both');
+  const [showEmailPreview, setShowEmailPreview] = useState<boolean>(false);
+  const [emailPreviewHtml, setEmailPreviewHtml] = useState<string | null>(null);
+  const [isEmailPreviewLoading, setIsEmailPreviewLoading] = useState<boolean>(false);
+  const [smtpStatus, setSmtpStatus] = useState<{
+    success: boolean;
+    mode: 'smtp' | 'not_configured' | 'smtp_error';
+    message: string;
+    config?: { host: string | null; port: number; sender_email: string };
+  } | null>(null);
+
+  useEffect(() => {
+    if (isSendModalOpen) {
+      letterService
+        .getSmtpStatus()
+        .then((data) => setSmtpStatus(data))
+        .catch(() => setSmtpStatus(null));
+    }
+  }, [isSendModalOpen]);
+
+  const handleToggleEmailPreview = async () => {
+    if (showEmailPreview) {
+      setShowEmailPreview(false);
+      return;
+    }
+    if (!appId) return;
+    setIsEmailPreviewLoading(true);
+    try {
+      const data = await letterService.previewCandidateEmail(appId, sendScope);
+      setEmailPreviewHtml(data.html);
+      setShowEmailPreview(true);
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to generate email preview.');
+    } finally {
+      setIsEmailPreviewLoading(false);
+    }
+  };
 
   // Populate state from lettersData
   useEffect(() => {
@@ -79,6 +137,13 @@ export const CandidateLetterReviewPage: React.FC = () => {
       setOfferContent((prev) => ({ ...serverOfferContent, ...offerF, ...prev }));
     }
   }, [lettersData]);
+
+  const application = lettersData?.application;
+  const loiLetter = lettersData?.letter_of_intent;
+  const offerLetter = lettersData?.offer_letter;
+  const activeLetter = activeTab === 'loi' ? loiLetter : offerLetter;
+  const letterVersion = activeLetter?.version;
+  const letterEditedAt = activeLetter?.last_edited_at;
 
   // Load candidate PDF into Blob URL when in PDF view mode
   useEffect(() => {
@@ -113,18 +178,123 @@ export const CandidateLetterReviewPage: React.FC = () => {
     return () => {
       isCancelled = true;
     };
-  }, [appId, activeTab, viewMode, lettersData]);
+  }, [appId, activeTab, viewMode, letterVersion, letterEditedAt]);
 
-  const application = lettersData?.application;
-  const loiLetter = lettersData?.letter_of_intent;
-  const offerLetter = lettersData?.offer_letter;
 
   const totalPages = activeTab === 'loi' ? 2 : 5;
 
-  // Validation
+  // Validation & Joining Date resolution
   const loiJoining = loiFields['joining_date']?.trim();
   const offerJoining = offerFields['joining_date']?.trim();
-  const isJoiningMissing = !loiJoining && !offerJoining;
+  const currentJoining = loiJoining || offerJoining || (lettersData?.application as any)?.joining_date || '';
+  const isJoiningMissing = !currentJoining;
+
+  // Helper date conversions and validation
+  const toInputDateFormat = (dmy: string): string => {
+    if (!dmy) return '';
+    const parts = dmy.split('/');
+    if (parts.length === 3) {
+      const [d, m, y] = parts;
+      return `${y.padStart(4, '20')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    return dmy;
+  };
+
+  const toDisplayDateFormat = (ymd: string): string => {
+    if (!ymd) return '';
+    const parts = ymd.split('-');
+    if (parts.length === 3) {
+      const [y, m, d] = parts;
+      return `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}`;
+    }
+    return ymd;
+  };
+
+  const isValidJoiningDate = (dateStr: string): boolean => {
+    if (!dateStr || !dateStr.trim()) return false;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const dateObj = new Date(y, m - 1, d);
+      return dateObj.getFullYear() === y && dateObj.getMonth() === m - 1 && dateObj.getDate() === d;
+    }
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+      const [d, m, y] = dateStr.split('/').map(Number);
+      const dateObj = new Date(y, m - 1, d);
+      return dateObj.getFullYear() === y && dateObj.getMonth() === m - 1 && dateObj.getDate() === d;
+    }
+    return false;
+  };
+
+  const handleOpenEditJoiningModal = () => {
+    setJoiningDateInput(currentJoining ? toInputDateFormat(currentJoining) : '');
+    setJoiningDateError(null);
+    setIsJoiningDateModalOpen(true);
+  };
+
+  const handleSaveJoiningDate = async () => {
+    if (!joiningDateInput.trim()) {
+      setJoiningDateError('Please select or enter a valid Joining Date.');
+      return;
+    }
+    if (!isValidJoiningDate(joiningDateInput.trim())) {
+      setJoiningDateError('Invalid date. Please choose a valid calendar date in DD/MM/YYYY format.');
+      return;
+    }
+
+    const formattedDate = joiningDateInput.includes('-')
+      ? toDisplayDateFormat(joiningDateInput.trim())
+      : joiningDateInput.trim();
+
+    setIsSavingJoiningDate(true);
+    setJoiningDateError(null);
+
+    // Capture previous state in case of failure
+    const prevLoiJoining = loiFields['joining_date'];
+    const prevOfferJoining = offerFields['joining_date'];
+
+    try {
+      const activeType = activeTab === 'loi' ? 'letter_of_intent' : 'offer_letter';
+      await updateLetterMutation.mutateAsync({
+        letterType: activeType,
+        fieldValues: {
+          ...(activeType === 'letter_of_intent' ? loiFields : offerFields),
+          joining_date: formattedDate,
+        },
+      });
+
+      // Update both local states immediately upon confirmation
+      setLoiFields((prev) => ({ ...prev, joining_date: formattedDate }));
+      setOfferFields((prev) => ({ ...prev, joining_date: formattedDate }));
+      setLoiContent((prev) => ({
+        ...prev,
+        joining_date: formattedDate,
+        p_start_date: `Start Date of Services: ${formattedDate}`,
+      }));
+      setOfferContent((prev) => ({
+        ...prev,
+        joining_date: formattedDate,
+        p16: `You are requested to join on or before Dated: ${formattedDate}.`,
+      }));
+
+      setIsJoiningDateModalOpen(false);
+      setFeedback({
+        type: 'success',
+        text: `Candidate Joining Date updated successfully to ${formattedDate}.`,
+      });
+
+      // Synchronize compiled documents
+      refetch();
+    } catch (err: any) {
+      // Preserve previously saved value on failure
+      setLoiFields((prev) => ({ ...prev, joining_date: prevLoiJoining }));
+      setOfferFields((prev) => ({ ...prev, joining_date: prevOfferJoining }));
+      const errorMsg =
+        err?.response?.data?.message || err?.message || 'Failed to update Joining Date. Please try again.';
+      setJoiningDateError(errorMsg);
+    } finally {
+      setIsSavingJoiningDate(false);
+    }
+  };
 
   // Handle in-place text edits on LOI
   const handleLoiTextChange = (key: string, newText: string) => {
@@ -357,6 +527,19 @@ export const CandidateLetterReviewPage: React.FC = () => {
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">
+          {canEdit && (
+            <GlassButton
+              type="button"
+              variant="secondary"
+              onClick={handleOpenEditJoiningModal}
+              leftIcon={<Calendar className="w-3.5 h-3.5 text-indigo-600" />}
+              className="text-xs py-2 px-3 flex items-center gap-1.5"
+              title="Edit Candidate Joining Date"
+            >
+              <span>Edit Joining Date</span>
+            </GlassButton>
+          )}
+
           <GlassButton
             type="button"
             variant={hasUnsavedChanges ? 'primary' : 'secondary'}
@@ -377,7 +560,7 @@ export const CandidateLetterReviewPage: React.FC = () => {
               if (isJoiningMissing) {
                 setFeedback({
                   type: 'error',
-                  text: 'Mandatory: Joining Date must be entered before letters can be emailed. Click on the Start Date line in the letter to specify it.',
+                  text: 'Mandatory: Joining Date must be entered before letters can be emailed. Click on "Edit Joining Date" to specify it.',
                 });
                 return;
               }
@@ -395,10 +578,10 @@ export const CandidateLetterReviewPage: React.FC = () => {
 
       {/* Candidate Profile Summary Header Card */}
       <GlassCard className="bg-white/95 border-slate-200 p-3.5">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 text-xs">
           <div>
             <span className="text-slate-400 block text-[11px]">Candidate Name</span>
-            <span className="font-bold text-slate-900 text-sm">{application.full_name}</span>
+            <span className="font-bold text-slate-900 text-sm truncate block">{application.full_name}</span>
           </div>
           <div>
             <span className="text-slate-400 block text-[11px]">Application ID</span>
@@ -410,7 +593,7 @@ export const CandidateLetterReviewPage: React.FC = () => {
           </div>
           <div>
             <span className="text-slate-400 block text-[11px]">Registered Email</span>
-            <span className="font-semibold text-slate-800">{application.email}</span>
+            <span className="font-semibold text-slate-800 truncate block">{application.email}</span>
           </div>
           <div>
             <span className="text-slate-400 block text-[11px]">Assigned Location</span>
@@ -418,17 +601,51 @@ export const CandidateLetterReviewPage: React.FC = () => {
               {application.district}, {application.current_state}
             </span>
           </div>
+          <div>
+            <span className="text-slate-400 block text-[11px]">Joining Date</span>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span
+                className={`font-semibold ${
+                  currentJoining ? 'text-indigo-900 font-bold' : 'text-amber-600 italic'
+                }`}
+              >
+                {currentJoining || 'Not specified'}
+              </span>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={handleOpenEditJoiningModal}
+                  className="p-1 rounded-md text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 transition-colors"
+                  title="Edit Joining Date"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </GlassCard>
 
       {/* Missing Joining Date Alert Banner */}
       {isJoiningMissing && (
-        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-          <div className="text-xs text-amber-800 leading-relaxed">
-            <span className="font-bold block text-sm mb-0.5">Mandatory: Joining Date is Required</span>
-            Please click on the <strong>Start Date of Services</strong> line in the preview below and enter the candidate's agreed start date.
+        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-800 leading-relaxed">
+              <span className="font-bold block text-sm mb-0.5">Mandatory: Joining Date is Required</span>
+              Please specify the candidate's agreed service commencement date before letters can be sent.
+            </div>
           </div>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={handleOpenEditJoiningModal}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 active:bg-amber-800 shadow-2xs transition-colors shrink-0"
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Edit Joining Date</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -720,6 +937,52 @@ export const CandidateLetterReviewPage: React.FC = () => {
             </div>
           </div>
 
+          {/* SMTP Delivery Channel Status */}
+          {smtpStatus && (
+            <div
+              className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
+                smtpStatus.mode === 'smtp'
+                  ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                  : smtpStatus.mode === 'smtp_error'
+                  ? 'bg-rose-50/80 border-rose-200 text-rose-900'
+                  : 'bg-amber-50/80 border-amber-200 text-amber-900'
+              }`}
+            >
+              <div className="mt-0.5 shrink-0">
+                {smtpStatus.mode === 'smtp' ? (
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-200" />
+                ) : smtpStatus.mode === 'smtp_error' ? (
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-rose-500 ring-2 ring-rose-200" />
+                ) : (
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-amber-200" />
+                )}
+              </div>
+              <div className="flex-1">
+                <div className="font-semibold flex items-center justify-between">
+                  <span>
+                    {smtpStatus.mode === 'smtp'
+                      ? `Live Email Delivery Active (${smtpStatus.config?.host}:${smtpStatus.config?.port})`
+                      : smtpStatus.mode === 'smtp_error'
+                      ? 'Live SMTP Authentication Error'
+                      : 'Offline / Emulated Mode (Local Storage Only)'}
+                  </span>
+                  {smtpStatus.config?.sender_email && (
+                    <span className="text-[10px] font-mono opacity-80">
+                      From: {smtpStatus.config.sender_email}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">
+                  {smtpStatus.mode === 'smtp'
+                    ? `An official email with document attachments will be sent directly to ${application.email}.`
+                    : smtpStatus.mode === 'smtp_error'
+                    ? `Cannot connect to SMTP server: ${smtpStatus.message}. Please verify SMTP credentials in backend/.env.`
+                    : 'SMTP is not configured in backend/.env. Letters will be generated and saved to server storage, but no email will reach the candidate. To send live emails, configure SMTP_HOST, SMTP_PORT, SMTP_USERNAME, and SMTP_PASSWORD in backend/.env.'}
+                </p>
+              </div>
+            </div>
+          )}
+
           <div>
             <span className="font-bold text-slate-800 block mb-1.5">Select Documents to Send:</span>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
@@ -762,6 +1025,37 @@ export const CandidateLetterReviewPage: React.FC = () => {
             </div>
           </div>
 
+          {/* Email Preview Section */}
+          <div className="pt-0.5">
+            <button
+              type="button"
+              onClick={handleToggleEmailPreview}
+              disabled={isEmailPreviewLoading}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+            >
+              {isEmailPreviewLoading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+              ) : (
+                <Eye className="w-3.5 h-3.5" />
+              )}
+              <span>{showEmailPreview ? 'Hide Email Preview' : 'Preview Congratulations Email Design'}</span>
+            </button>
+
+            {showEmailPreview && emailPreviewHtml && (
+              <div className="mt-2.5 rounded-xl border border-slate-200 overflow-hidden shadow-xs bg-slate-100">
+                <div className="p-2.5 bg-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between text-[11px] px-3 gap-1">
+                  <span className="font-semibold text-amber-400">Subject: Congratulations on Your Selection | CEF Portal</span>
+                  <span className="text-slate-300 font-mono text-[10px]">To: {application.email}</span>
+                </div>
+                <iframe
+                  srcDoc={emailPreviewHtml}
+                  title="Congratulations Email Preview"
+                  className="w-full h-[380px] border-0 bg-white"
+                />
+              </div>
+            )}
+          </div>
+
           <label className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50/70 border border-amber-200 cursor-pointer">
             <input
               type="checkbox"
@@ -795,6 +1089,91 @@ export const CandidateLetterReviewPage: React.FC = () => {
             </GlassButton>
           </div>
         </div>
+      </Modal>
+
+      {/* Modal: Edit Joining Date */}
+      <Modal
+        isOpen={isJoiningDateModalOpen}
+        onClose={() => {
+          if (!isSavingJoiningDate) {
+            setIsJoiningDateModalOpen(false);
+            setJoiningDateError(null);
+          }
+        }}
+        title="Edit Candidate Joining Date"
+        description="Select or update the candidate's agreed service commencement / reporting date."
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSaveJoiningDate();
+          }}
+          className="space-y-4 pt-2 text-xs"
+        >
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+            <div className="flex justify-between">
+              <span className="text-slate-500">Candidate:</span>
+              <span className="font-bold text-slate-900">{application.full_name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Application Number:</span>
+              <span className="font-mono text-indigo-700">{application.application_number}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Current Joining Date:</span>
+              <span className="font-bold text-slate-900">{currentJoining || 'Not specified'}</span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <GlassInput
+              id="joining-date-input"
+              label="Select Joining Date"
+              type="date"
+              value={joiningDateInput.includes('/') ? toInputDateFormat(joiningDateInput) : joiningDateInput}
+              onChange={(e) => {
+                setJoiningDateInput(e.target.value);
+                setJoiningDateError(null);
+              }}
+              error={joiningDateError || undefined}
+              helperText="Choose reporting date. Standard format: DD/MM/YYYY"
+              leftIcon={<Calendar className="w-4 h-4 text-indigo-600" />}
+              required
+            />
+
+            {joiningDateInput && isValidJoiningDate(joiningDateInput) && (
+              <div className="p-2.5 rounded-lg bg-indigo-50/70 border border-indigo-100 flex items-center justify-between">
+                <span className="text-slate-500 text-[11px]">Formatted Date (DD/MM/YYYY):</span>
+                <span className="font-mono font-bold text-indigo-800 text-xs">
+                  {joiningDateInput.includes('-') ? toDisplayDateFormat(joiningDateInput) : joiningDateInput}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <GlassButton
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setIsJoiningDateModalOpen(false);
+                setJoiningDateError(null);
+              }}
+              disabled={isSavingJoiningDate}
+              className="text-xs"
+            >
+              Cancel
+            </GlassButton>
+            <GlassButton
+              type="submit"
+              variant="primary"
+              isLoading={isSavingJoiningDate}
+              className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white"
+            >
+              Save Joining Date
+            </GlassButton>
+          </div>
+        </form>
       </Modal>
     </div>
   );

@@ -39,6 +39,7 @@ APPLICATION_STATUS_IN_PROGRESS = "IN_PROGRESS"
 APPLICATION_STATUS_COMPLETE = "VERIFICATION_COMPLETE"
 APPLICATION_STATUS_NEEDS_CORRECTION = "NEEDS_CORRECTION"
 APPLICATION_STATUS_APPROVED = "APPROVED"
+APPLICATION_STATUS_OFFER_ACCEPTED = "OFFER_ACCEPTED"
 APPLICATION_STATUS_REJECTED = "REJECTED"
 
 # Document Categories
@@ -120,6 +121,9 @@ class CandidateApplication(db.Model):
     asking_salary: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     negotiated_salary: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
 
+    # Joining Date
+    joining_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
     # Status & Timestamps
     status: Mapped[str] = mapped_column(String(50), default=APPLICATION_STATUS_PENDING, nullable=False)
     reviewed_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -133,6 +137,19 @@ class CandidateApplication(db.Model):
     )
     rejection_reason: Mapped[Optional[str]] = mapped_column(
         String(1000),
+        nullable=True,
+    )
+    offer_accepted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    offer_accepted_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    offer_acceptance_status: Mapped[Optional[str]] = mapped_column(
+        String(50),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -150,6 +167,7 @@ class CandidateApplication(db.Model):
     # Relationships
     user: Mapped["User"] = relationship("User", foreign_keys=[user_id], backref="applications")
     reviewed_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[reviewed_by_id])
+    offer_accepted_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[offer_accepted_by_id])
     documents: Mapped[list["CandidateDocument"]] = relationship(
         "CandidateDocument",
         backref="application",

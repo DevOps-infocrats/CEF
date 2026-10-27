@@ -302,12 +302,13 @@ def mark_item_done(app_id: str, item_key: str):
     payload = request.get_json(silent=True) or {}
     validated_payload = _update_item_schema.load(payload)
     remarks = validated_payload.get("remarks")
+    target_key = str(validated_payload.get("document_id") or item_key)
 
     ip_address, user_agent = _get_client_metadata()
 
     item, updated_app = CandidateService.mark_verification_item(
         application_id=application.id,
-        item_key=item_key,
+        item_key=target_key,
         verifier_user=user,
         remarks=remarks,
         ip_address=ip_address,
@@ -325,6 +326,14 @@ def mark_item_done(app_id: str, item_key: str):
         message=f"Verification item '{item.item_label}' marked as Done.",
         status_code=200,
     )
+
+
+@candidates_bp.route("/<string:app_id>/documents/<uuid:doc_id>/verify", methods=["POST"])
+@require_auth
+def verify_document(app_id: str, doc_id: uuid.UUID):
+    """Verify an individual candidate document by document UUID (Staff with documents:verify only)."""
+    return mark_item_done(app_id, str(doc_id))
+
 
 
 @candidates_bp.route("/<string:app_id>/verification/<string:item_key>/reset", methods=["POST"])

@@ -311,10 +311,10 @@ class User(db.Model):
         if perms:
             return sorted(list(perms))
 
-        # 3. Fallback to default role permissions ONLY for self-registered applicants without custom assignments
-        if "candidate" in self.role_names:
+        # 3. Fallback to default role permissions for assigned roles without custom dynamic assignments
+        if self.role_names:
             from app.modules.auth.permissions import get_default_permissions_for_roles
-            return sorted(list(get_default_permissions_for_roles(["candidate"])))
+            return sorted(list(get_default_permissions_for_roles(self.role_names)))
 
         return []
 
@@ -413,6 +413,10 @@ class AuditLog(db.Model):
 
     # Relationships
     user: Mapped[Optional["User"]] = relationship("User", back_populates="audit_logs")
+
+    __table_args__ = (
+        Index("idx_audit_action_created", "action", "created_at"),
+    )
 
     def __init__(
         self,

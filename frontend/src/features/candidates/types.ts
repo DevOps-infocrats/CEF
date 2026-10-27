@@ -139,6 +139,7 @@ export interface CandidateApplicationResponse {
   // Step 5: Uploaded Documents
   documents?: CandidateDocument[];
 
+  joining_date?: string | null;
   status: string;
   created_at: string;
   updated_at: string;
