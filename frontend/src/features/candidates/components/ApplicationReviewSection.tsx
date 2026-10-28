@@ -29,20 +29,23 @@ export const ApplicationReviewSection: React.FC<ApplicationReviewSectionProps> =
   submissionError,
 }) => {
   // Helper to mask Aadhaar: show only last 4 digits (e.g. •••• •••• 1234)
-  const maskAadhaar = (num: string) => {
-    if (!num || num.length < 4) return '••••';
+  const maskAadhaar = (num?: string) => {
+    if (!num) return '—';
+    if (num.length < 4) return num;
     return `•••• •••• ${num.slice(-4)}`;
   };
 
   // Helper to mask PAN: show last 5 characters (e.g. •••••1234F)
-  const maskPAN = (pan: string) => {
-    if (!pan || pan.length < 5) return '•••••';
+  const maskPAN = (pan?: string) => {
+    if (!pan) return '—';
+    if (pan.length < 5) return pan.toUpperCase();
     return `•••••${pan.slice(-5).toUpperCase()}`;
   };
 
   // Helper to mask Bank Account: show only last 4 digits
-  const maskAccount = (acc: string) => {
-    if (!acc || acc.length < 4) return '••••';
+  const maskAccount = (acc?: string) => {
+    if (!acc) return '—';
+    if (acc.length < 4) return acc;
     return `••••••••${acc.slice(-4)}`;
   };
 

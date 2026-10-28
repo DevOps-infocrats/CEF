@@ -2,93 +2,101 @@ import { z } from 'zod';
 
 export const candidateApplicationSchema = z
   .object({
-    hero_category: z.enum(['Hero 1', 'Hero 2'], {
-      required_error: 'Hero category is required',
-    }),
-    role_applied: z.string().min(1, 'Role selection is required'),
+    hero_category: z.enum(['Hero 1', 'Hero 2']).optional().default('Hero 1'),
+    role_applied: z.string().optional().default('HDD Operate'),
 
     // Personal Information
     full_name: z
       .string()
-      .min(2, 'Full name must be at least 2 characters')
       .max(120, 'Full name cannot exceed 120 characters')
-      .regex(/^[a-zA-Z\s.'-]+$/, 'Full name contains invalid characters'),
+      .refine((val) => !val || /^[a-zA-Z\s.'-]+$/.test(val), {
+        message: 'Full name contains invalid characters',
+      })
+      .optional()
+      .or(z.literal('')),
     mobile_number: z
       .string()
-      .regex(/^[6-9]\d{9}$/, 'Mobile number must be a valid 10-digit Indian number'),
+      .refine((val) => !val || /^[6-9]\d{9}$/.test(val.replace(/\s+/g, '')), {
+        message: 'Mobile number must be a valid 10-digit Indian number',
+      })
+      .optional()
+      .or(z.literal('')),
     email: z
       .string()
-      .email('Please enter a valid email address')
-      .max(120, 'Email cannot exceed 120 characters'),
+      .max(120, 'Email cannot exceed 120 characters')
+      .refine((val) => !val || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val), {
+        message: 'Please enter a valid email address',
+      })
+      .optional()
+      .or(z.literal('')),
     aadhaar_number: z
       .string()
-      .regex(/^\d{12}$/, 'Aadhaar number must be exactly 12 digits'),
+      .refine((val) => !val || /^\d{12}$/.test(val.replace(/\s+/g, '')), {
+        message: 'Aadhaar number must be exactly 12 digits',
+      })
+      .optional()
+      .or(z.literal('')),
     pan_number: z
       .string()
-      .transform((val) => val.toUpperCase().trim())
-      .pipe(
-        z.string().regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, 'Invalid PAN format (e.g. ABCDE1234F)')
-      ),
+      .transform((val) => (val ? val.toUpperCase().trim() : ''))
+      .refine((val) => !val || /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(val), {
+        message: 'Invalid PAN format (e.g. ABCDE1234F)',
+      })
+      .optional()
+      .or(z.literal('')),
 
     // Current Address
-    current_address_line1: z
-      .string()
-      .min(3, 'Address Line 1 is required')
-      .max(255, 'Address Line 1 cannot exceed 255 characters'),
-    current_address_line2: z.string().max(255).optional(),
-    current_city: z
-      .string()
-      .min(2, 'City is required')
-      .max(100, 'City cannot exceed 100 characters'),
-    current_state: z
-      .string()
-      .min(2, 'State is required')
-      .max(100, 'State cannot exceed 100 characters'),
+    current_address_line1: z.string().max(255).optional().or(z.literal('')),
+    current_address_line2: z.string().max(255).optional().or(z.literal('')),
+    current_city: z.string().max(100).optional().or(z.literal('')),
+    current_state: z.string().max(100).optional().or(z.literal('')),
     current_pin_code: z
       .string()
-      .regex(/^\d{6}$/, 'PIN Code must be exactly 6 digits'),
-    current_country: z
-      .string()
-      .min(2, 'Country is required')
-      .default('India'),
+      .refine((val) => !val || /^\d{6}$/.test(val.replace(/\s+/g, '')), {
+        message: 'PIN Code must be exactly 6 digits',
+      })
+      .optional()
+      .or(z.literal('')),
+    current_country: z.string().default('India').optional().or(z.literal('')),
 
     // Permanent Address
     is_permanent_same: z.boolean().default(false),
-    permanent_address_line1: z.string().optional(),
-    permanent_address_line2: z.string().max(255).optional(),
-    permanent_city: z.string().optional(),
-    permanent_state: z.string().optional(),
-    permanent_pin_code: z.string().optional(),
-    permanent_country: z.string().default('India'),
+    permanent_address_line1: z.string().max(255).optional().or(z.literal('')),
+    permanent_address_line2: z.string().max(255).optional().or(z.literal('')),
+    permanent_city: z.string().max(100).optional().or(z.literal('')),
+    permanent_state: z.string().max(100).optional().or(z.literal('')),
+    permanent_pin_code: z
+      .string()
+      .refine((val) => !val || /^\d{6}$/.test(val.replace(/\s+/g, '')), {
+        message: 'Permanent PIN Code must be exactly 6 digits',
+      })
+      .optional()
+      .or(z.literal('')),
+    permanent_country: z.string().default('India').optional().or(z.literal('')),
 
     // Bank Details
-    account_holder_name: z
-      .string()
-      .min(2, 'Account Holder Name is required')
-      .max(120, 'Account Holder Name cannot exceed 120 characters'),
-    bank_name: z
-      .string()
-      .min(2, 'Bank Name is required')
-      .max(120, 'Bank Name cannot exceed 120 characters'),
+    account_holder_name: z.string().max(120).optional().or(z.literal('')),
+    bank_name: z.string().max(120).optional().or(z.literal('')),
     account_number: z
       .string()
-      .regex(/^\d{9,18}$/, 'Account number must be between 9 and 18 digits'),
-    confirm_account_number: z
-      .string()
-      .min(1, 'Please confirm your account number'),
+      .refine((val) => !val || /^\d{9,18}$/.test(val.replace(/\s+/g, '')), {
+        message: 'Account number must be between 9 and 18 digits',
+      })
+      .optional()
+      .or(z.literal('')),
+    confirm_account_number: z.string().optional().or(z.literal('')),
     ifsc_code: z
       .string()
-      .transform((val) => val.toUpperCase().trim())
-      .pipe(
-        z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC code format (e.g. SBIN0001234)')
-      ),
-    branch_name: z.string().max(120).optional(),
+      .transform((val) => (val ? val.toUpperCase().trim() : ''))
+      .refine((val) => !val || /^[A-Z]{4}0[A-Z0-9]{6}$/.test(val), {
+        message: 'Invalid IFSC code format (e.g. SBIN0001234)',
+      })
+      .optional()
+      .or(z.literal('')),
+    branch_name: z.string().max(120).optional().or(z.literal('')),
 
     // Step 4: Location Details
-    circle: z
-      .string()
-      .min(2, 'Circle name is required (at least 2 characters)')
-      .max(100, 'Circle cannot exceed 100 characters'),
+    circle: z.string().max(100).optional().or(z.literal('')),
     district: z.string().optional().default(''),
     block: z.string().optional().default(''),
     district_ids: z.array(z.string()).optional().default([]),
@@ -96,25 +104,29 @@ export const candidateApplicationSchema = z
 
     // Step 4: Salary Details
     current_salary: z
-      .union([z.string(), z.number()])
+      .union([z.string(), z.number(), z.undefined()])
+      .optional()
       .refine(
         (val) => {
+          if (val === undefined || val === '' || val === null) return true;
           const num = Number(val);
           return !isNaN(num) && num >= 0;
         },
         { message: 'Current salary must be a non-negative amount' }
       )
-      .transform((val) => Number(val)),
+      .transform((val) => (val === '' || val === undefined || val === null ? undefined : Number(val))),
     asking_salary: z
-      .union([z.string(), z.number()])
+      .union([z.string(), z.number(), z.undefined()])
+      .optional()
       .refine(
         (val) => {
+          if (val === undefined || val === '' || val === null) return true;
           const num = Number(val);
           return !isNaN(num) && num >= 0;
         },
         { message: 'Asking salary must be a non-negative amount' }
       )
-      .transform((val) => Number(val)),
+      .transform((val) => (val === '' || val === undefined || val === null ? undefined : Number(val))),
     negotiated_salary: z
       .union([z.string(), z.number(), z.undefined()])
       .optional()
@@ -129,61 +141,14 @@ export const candidateApplicationSchema = z
       .transform((val) => (val === '' || val === undefined || val === null ? undefined : Number(val))),
   })
   .superRefine((data, ctx) => {
-    // Permanent Address validation if not same
-    if (!data.is_permanent_same) {
-      if (!data.permanent_address_line1 || data.permanent_address_line1.trim().length < 3) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Permanent Address Line 1 is required when not same as current',
-          path: ['permanent_address_line1'],
-        });
-      }
-      if (!data.permanent_city || data.permanent_city.trim().length < 2) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Permanent City is required',
-          path: ['permanent_city'],
-        });
-      }
-      if (!data.permanent_state || data.permanent_state.trim().length < 2) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Permanent State is required',
-          path: ['permanent_state'],
-        });
-      }
-      if (!data.permanent_pin_code || !/^\d{6}$/.test(data.permanent_pin_code)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Permanent PIN Code must be exactly 6 digits',
-          path: ['permanent_pin_code'],
-        });
-      }
-    }
-
-    // Bank account confirmation match
-    if (data.account_number !== data.confirm_account_number) {
+    // Only check bank account match if both account numbers are entered
+    const acc = data.account_number ? data.account_number.trim() : '';
+    const confirm = data.confirm_account_number ? data.confirm_account_number.trim() : '';
+    if (acc && confirm && acc !== confirm) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Account numbers do not match',
         path: ['confirm_account_number'],
-      });
-    }
-
-    // District & Block multi-select validation
-    if ((!data.district_ids || data.district_ids.length === 0) && (!data.district || data.district.trim().length < 2)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Please select at least one district',
-        path: ['district_ids'],
-      });
-    }
-
-    if ((!data.block_ids || data.block_ids.length === 0) && (!data.block || data.block.trim().length < 2)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Please select at least one block',
-        path: ['block_ids'],
       });
     }
   });

@@ -11,6 +11,7 @@ from app.modules.auth.models import AuditLog
 from app.modules.candidates.models import ApplicationRole
 from app.modules.candidates.schemas import (
     CreateCandidateApplicationSchema,
+    UpdateCandidateApplicationSchema,
     CandidateApplicationResponseSchema,
     CandidateDocumentResponseSchema,
     CandidateVerificationItemResponseSchema,
@@ -32,6 +33,7 @@ from app.modules.candidates.selectors import (
 candidates_bp = Blueprint("candidates", __name__, url_prefix="/api/v1/applications")
 
 _create_schema = CreateCandidateApplicationSchema()
+_update_app_schema = UpdateCandidateApplicationSchema()
 _response_schema = CandidateApplicationResponseSchema()
 _list_schema = CandidateApplicationResponseSchema(many=True)
 _doc_schema = CandidateDocumentResponseSchema()
@@ -240,6 +242,46 @@ def get_application_detail(app_id: str):
     return api_response(
         data=schema.dump(application),
         message="Application details retrieved successfully.",
+        status_code=200,
+    )
+
+
+@candidates_bp.route("/<string:app_id>", methods=["PUT", "PATCH"])
+@require_auth
+def update_application(app_id: str):
+    """Update an existing candidate application, preserving existing values for omitted fields."""
+    application = get_application_by_id(app_id)
+    if not application:
+        raise NotFoundError("Application record not found.")
+
+    user = g.current_user
+    can_edit = (
+        application.user_id == user.id
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:write")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:create")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:submit")
+        or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or "admin" in user.role_names
+    )
+    if not can_edit:
+        raise ForbiddenError("You are not authorized to update this application.")
+
+    payload = request.get_json(silent=True) or {}
+    validated_data = _update_app_schema.load(payload, partial=True)
+
+    ip_address, user_agent = _get_client_metadata()
+
+    updated_app = CandidateService.update_application(
+        application=application,
+        data=validated_data,
+        user=user,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+    return api_response(
+        data=_response_schema.dump(updated_app),
+        message="Candidate application updated successfully.",
         status_code=200,
     )
 

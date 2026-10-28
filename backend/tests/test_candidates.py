@@ -59,12 +59,72 @@ def test_submit_application_requires_auth(client, sample_valid_payload):
     assert res.status_code == 401
 
 
-def test_submit_application_missing_mandatory_documents(client, sample_valid_payload):
-    """Test application submission fails if mandatory documents are not uploaded."""
+def test_submit_application_without_documents_succeeds(client, sample_valid_payload):
+    """Test application submission succeeds even when documents are not uploaded (documents are optional)."""
     headers = get_auth_token_for_user(client, "nodocs@example.org", "Password123")
     res = client.post("/api/v1/applications", json=sample_valid_payload, headers=headers)
-    assert res.status_code == 400
-    assert "Mandatory document upload required" in res.get_json()["message"]
+    assert res.status_code == 201
+    data = res.get_json()["data"]
+    assert data["documents"] == []
+    assert data["status"] == "PENDING_VERIFICATION"
+
+
+def test_submit_application_completely_empty_and_partial(client):
+    """Test submitting an application with completely empty payload or with only one field."""
+    headers = get_auth_token_for_user(client, "emptyapp@example.org", "Password123")
+
+    # 1. Completely empty payload
+    res_empty = client.post("/api/v1/applications", json={}, headers=headers)
+    assert res_empty.status_code == 201
+    data_empty = res_empty.get_json()["data"]
+    assert data_empty["application_number"].startswith("CEF-APP-")
+    assert data_empty["full_name"] is None or data_empty["full_name"] == ""
+    assert data_empty["status"] == "PENDING_VERIFICATION"
+    assert data_empty["documents"] == []
+
+    # 2. Only one or few fields filled
+    headers2 = get_auth_token_for_user(client, "partialapp@example.org", "Password123")
+    partial_payload = {
+        "full_name": "Partially Entered Candidate",
+        "mobile_number": "9876543210",
+    }
+    res_partial = client.post("/api/v1/applications", json=partial_payload, headers=headers2)
+    assert res_partial.status_code == 201
+    data_partial = res_partial.get_json()["data"]
+    assert data_partial["full_name"] == "Partially Entered Candidate"
+    assert data_partial["mobile_number"] == "9876543210"
+    assert data_partial["email"] is None
+    assert data_partial["current_salary"] is None
+
+
+def test_update_application_preserves_unrelated_fields(client, sample_valid_payload):
+    """Test updating application with partial fields preserves existing values for omitted fields."""
+    headers = get_auth_token_for_user(client, "updatepres@example.org", "Password123")
+    create_res = client.post("/api/v1/applications", json=sample_valid_payload, headers=headers)
+    assert create_res.status_code == 201
+    app_id = create_res.get_json()["data"]["id"]
+    original_data = create_res.get_json()["data"]
+
+    # Update only current_city and asking_salary, leaving others omitted
+    update_payload = {
+        "current_city": "Navi Mumbai",
+        "asking_salary": "55000",
+    }
+    put_res = client.put(f"/api/v1/applications/{app_id}", json=update_payload, headers=headers)
+    assert put_res.status_code == 200
+    updated_data = put_res.get_json()["data"]
+
+    # Verify updated fields
+    assert updated_data["current_city"] == "Navi Mumbai"
+    assert float(updated_data["asking_salary"]) == 55000.0
+
+    # Verify unrelated fields are preserved
+    assert updated_data["full_name"] == original_data["full_name"]
+    assert updated_data["mobile_number"] == original_data["mobile_number"]
+    assert updated_data["email"] == original_data["email"]
+    assert updated_data["bank_name"] == original_data["bank_name"]
+    assert updated_data["circle"] == original_data["circle"]
+    assert float(updated_data["current_salary"]) == float(original_data["current_salary"])
 
 
 def test_document_upload_invalid_filetype(client):

@@ -10,6 +10,7 @@ import { HeroCategory, RoleApplied, CandidateApplicationResponse, DocumentCatego
 import {
   useMyApplications,
   useCreateApplication,
+  useUpdateApplication,
   useStagedDocuments,
   useUploadDocument,
   useDeleteDocument,
@@ -73,6 +74,9 @@ export const CandidateApplicationPage: React.FC = () => {
   // Success state holding backend response
   const [submittedApp, setSubmittedApp] = useState<CandidateApplicationResponse | null>(null);
 
+  // Edit application state
+  const [editingAppId, setEditingAppId] = useState<string | null>(null);
+
   // Staged document upload state
   const [uploadingCategory, setUploadingCategory] = useState<DocumentCategory | null>(null);
 
@@ -82,6 +86,7 @@ export const CandidateApplicationPage: React.FC = () => {
   });
   const { data: stagedDocs = [] } = useStagedDocuments();
   const createMutation = useCreateApplication();
+  const updateMutation = useUpdateApplication();
   const uploadDocMutation = useUploadDocument();
   const deleteDocMutation = useDeleteDocument();
 
@@ -236,20 +241,83 @@ export const CandidateApplicationPage: React.FC = () => {
 
   // Submit Final to Backend with duplicate submission prevention
   const handleFinalSubmit = () => {
-    if (createMutation.isPending) return;
+    if (createMutation.isPending || updateMutation.isPending) return;
     handleSubmit((data) => {
-      createMutation.mutate(data as unknown as CandidateApplicationFormOutput, {
-        onSuccess: (savedApp) => {
-          setSubmittedApp(savedApp);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        },
-      });
+      if (editingAppId) {
+        updateMutation.mutate(
+          {
+            id: editingAppId,
+            data: data as unknown as Partial<CandidateApplicationFormOutput>,
+          },
+          {
+            onSuccess: (savedApp) => {
+              setSubmittedApp(savedApp);
+              setEditingAppId(null);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }
+        );
+      } else {
+        createMutation.mutate(data as unknown as CandidateApplicationFormOutput, {
+          onSuccess: (savedApp) => {
+            setSubmittedApp(savedApp);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          },
+        });
+      }
     })();
+  };
+
+  const handleEditApplication = (app: CandidateApplicationResponse) => {
+    setEditingAppId(app.id);
+    reset({
+      hero_category: (app.hero_category as HeroCategory) || 'Hero 1',
+      role_applied: (app.role_applied as RoleApplied) || 'HDD Operate',
+      full_name: app.full_name || '',
+      mobile_number: app.mobile_number || '',
+      email: app.email || '',
+      aadhaar_number: '',
+      pan_number: '',
+      current_address_line1: app.current_address_line1 || '',
+      current_address_line2: app.current_address_line2 || '',
+      current_city: app.current_city || '',
+      current_state: app.current_state || '',
+      current_pin_code: app.current_pin_code || '',
+      current_country: app.current_country || 'India',
+      is_permanent_same: app.is_permanent_same || false,
+      permanent_address_line1: app.permanent_address_line1 || '',
+      permanent_address_line2: app.permanent_address_line2 || '',
+      permanent_city: app.permanent_city || '',
+      permanent_state: app.permanent_state || '',
+      permanent_pin_code: app.permanent_pin_code || '',
+      permanent_country: app.permanent_country || 'India',
+      account_holder_name: app.account_holder_name || '',
+      bank_name: app.bank_name || '',
+      account_number: '',
+      confirm_account_number: '',
+      ifsc_code: app.ifsc_code || '',
+      branch_name: app.branch_name || '',
+      circle: app.circle || '',
+      district: app.district || '',
+      block: app.block || '',
+      district_ids: [],
+      block_ids: [],
+      current_salary: app.current_salary !== undefined && app.current_salary !== null ? String(app.current_salary) : '',
+      asking_salary: app.asking_salary !== undefined && app.asking_salary !== null ? String(app.asking_salary) : '',
+      negotiated_salary: app.negotiated_salary !== undefined && app.negotiated_salary !== null ? String(app.negotiated_salary) : '',
+    });
+    setSelectedHero((app.hero_category as HeroCategory) || 'Hero 1');
+    setSelectedRole((app.role_applied as RoleApplied) || 'HDD Operate');
+    setCurrentStep(1);
+    setSubmittedApp(null);
+    setViewMode('form');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleStartNewApplication = () => {
     reset();
     setSubmittedApp(null);
+    setEditingAppId(null);
     setSelectedRole(null);
     setCurrentStep(1);
     setViewMode('form');
@@ -322,6 +390,7 @@ export const CandidateApplicationPage: React.FC = () => {
           applications={myAppsData?.applications || []}
           isLoading={isLoadingApps}
           onNewApplication={handleStartNewApplication}
+          onEditApplication={handleEditApplication}
         />
       )}
 
@@ -434,16 +503,32 @@ export const CandidateApplicationPage: React.FC = () => {
                   <span className="text-indigo-800 bg-indigo-50 px-2.5 py-0.5 rounded-md border border-indigo-200">
                     {selectedRole}
                   </span>
+                  {editingAppId && (
+                    <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 text-[11px] font-bold">
+                      Editing Saved Record
+                    </span>
+                  )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setSelectedRole(null)}
-                  className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-indigo-700 font-semibold"
-                >
-                  <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Return to Role Selection (Data Preserved)</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  {editingAppId && (
+                    <button
+                      type="button"
+                      onClick={handleStartNewApplication}
+                      className="text-xs text-rose-600 hover:text-rose-700 font-semibold underline"
+                    >
+                      Cancel Edit
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRole(null)}
+                    className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-indigo-700 font-semibold"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>Return to Role Selection (Data Preserved)</span>
+                  </button>
+                </div>
               </div>
 
               {/* Step Navigation Progress Bar (5 Steps) */}
@@ -540,12 +625,17 @@ export const CandidateApplicationPage: React.FC = () => {
                     formData={getValues()}
                     onEditSection={handleEditSection}
                     onSubmitFinal={handleFinalSubmit}
-                    isSubmitting={createMutation.isPending}
+                    isSubmitting={createMutation.isPending || updateMutation.isPending}
+                    isEditing={!!editingAppId}
                     submissionError={
                       createMutation.isError
                         ? (createMutation.error as unknown as { response?: { data?: { error?: string; message?: string } } })?.response?.data?.message ||
                           (createMutation.error as unknown as { response?: { data?: { error?: string } } })?.response?.data?.error ||
                           'Failed to submit application. Please verify all requirements and try again.'
+                        : updateMutation.isError
+                        ? (updateMutation.error as unknown as { response?: { data?: { error?: string; message?: string } } })?.response?.data?.message ||
+                          (updateMutation.error as unknown as { response?: { data?: { error?: string } } })?.response?.data?.error ||
+                          'Failed to update application. Please verify all requirements and try again.'
                         : null
                     }
                   />

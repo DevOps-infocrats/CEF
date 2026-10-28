@@ -37,6 +37,34 @@ export const useCreateApplication = () => {
   });
 };
 
+export const useUpdateApplication = () => {
+  const queryClient = useQueryClient();
+  const { success, error } = useToast();
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: Partial<CandidateApplicationFormOutput>;
+    }) => candidateService.updateApplication(id, data),
+    onSuccess: (savedApp) => {
+      queryClient.invalidateQueries({ queryKey: CANDIDATES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: [...CANDIDATES_QUERY_KEY, savedApp.id] });
+      success(`Application ${savedApp.application_number} updated successfully.`);
+    },
+    onError: (err: any) => {
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'Failed to update application.';
+      error(msg);
+    },
+  });
+};
+
 export const useStagedDocuments = () => {
   return useQuery({
     queryKey: STAGED_DOCS_QUERY_KEY,

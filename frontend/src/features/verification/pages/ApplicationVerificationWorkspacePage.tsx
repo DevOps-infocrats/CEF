@@ -499,11 +499,7 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
                   type="button"
                   onClick={() => setIsApproveModalOpen(true)}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 shadow-2xs transition-colors"
-                  title={
-                    isVerificationComplete
-                      ? 'Approve Candidate'
-                      : 'All mandatory checks must be complete before approval'
-                  }
+                  title="Approve Candidate"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   <span>Approve Candidate</span>
@@ -1672,80 +1668,62 @@ export const ApplicationVerificationWorkspacePage: React.FC = () => {
       <Modal
         isOpen={isApproveModalOpen}
         onClose={() => setIsApproveModalOpen(false)}
-        title={isVerificationComplete ? 'Confirm Candidate Approval' : 'Approval Blocked — Verification Incomplete'}
+        title="Confirm Candidate Approval"
         maxWidth="md"
       >
         <div className="space-y-3.5 text-xs">
           {!isVerificationComplete ? (
-            <div className="space-y-3">
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-semibold">Candidate cannot be approved yet.</p>
-                  <p className="mt-1 text-amber-800">
-                    All mandatory verification checklist items and required credentials must be marked as Done before final candidate approval can be confirmed.
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">Candidate details or verification checks are incomplete.</p>
+                <p className="mt-1 text-amber-800">
+                  You can approve this candidate now and generate their Offer Letter using available details. Missing items will remain blank without blocking letter generation.
+                </p>
+                {pendingMandatoryLabels.length > 0 && (
+                  <p className="mt-1 text-[11px] text-amber-700">
+                    Pending items: {pendingMandatoryLabels.join(', ')}
                   </p>
-                </div>
-              </div>
-
-              {pendingMandatoryLabels.length > 0 && (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                  <span className="font-bold text-slate-800">Outstanding Required Items:</span>
-                  <ul className="list-disc list-inside text-slate-700 space-y-1 pt-1">
-                    {pendingMandatoryLabels.map((lbl, idx) => (
-                      <li key={idx}>
-                        <strong className="text-slate-900">{lbl}</strong> is not verified
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              <div className="flex justify-end pt-2 border-t border-slate-100">
-                <GlassButton variant="secondary" size="sm" onClick={() => setIsApproveModalOpen(false)}>
-                  Close
-                </GlassButton>
+                )}
               </div>
             </div>
           ) : (
-            <div className="space-y-3">
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 flex items-start gap-2.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-semibold">All mandatory verification checks are satisfied.</p>
-                  <p className="mt-1 text-emerald-800">
-                    Approving this candidate will record the final <strong>Approved</strong> status in the database and store your reviewer authorization in the audit trail.
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1 text-slate-700">
-                <div>Candidate: <strong className="text-slate-900">{application.full_name}</strong></div>
-                <div>Application ID: <strong className="font-mono text-slate-900">{application.application_number}</strong></div>
-                <div>Role: <strong className="text-slate-900">{application.hero_category} — {application.role_applied}</strong></div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <GlassButton
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setIsApproveModalOpen(false)}
-                  disabled={approveMutation.isPending}
-                >
-                  Cancel
-                </GlassButton>
-                <button
-                  type="button"
-                  onClick={handleConfirmApprove}
-                  disabled={approveMutation.isPending}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 shadow-2xs transition-colors"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>{approveMutation.isPending ? 'Saving Approval...' : 'Confirm Candidate Approval'}</span>
-                </button>
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">All mandatory verification checks are satisfied.</p>
+                <p className="mt-1 text-emerald-800">
+                  Approving this candidate will record the final <strong>Approved</strong> status in the database and store your reviewer authorization in the audit trail.
+                </p>
               </div>
             </div>
           )}
+
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1 text-slate-700">
+            <div>Candidate: <strong className="text-slate-900">{application.full_name || '—'}</strong></div>
+            <div>Application ID: <strong className="font-mono text-slate-900">{application.application_number}</strong></div>
+            <div>Role: <strong className="text-slate-900">{application.hero_category || '—'} — {application.role_applied || '—'}</strong></div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <GlassButton
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsApproveModalOpen(false)}
+              disabled={approveMutation.isPending}
+            >
+              Cancel
+            </GlassButton>
+            <button
+              type="button"
+              onClick={handleConfirmApprove}
+              disabled={approveMutation.isPending}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 shadow-2xs transition-colors"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>{approveMutation.isPending ? 'Saving Approval...' : 'Confirm Candidate Approval'}</span>
+            </button>
+          </div>
         </div>
       </Modal>
 

@@ -13,6 +13,7 @@ from app.modules.letters.models import (
 from app.modules.letters.services import (
     LetterTemplateService,
     LetterGenerationService,
+    resolve_storage_path,
 )
 
 letters_bp = Blueprint("letters", __name__, url_prefix="/api/v1")
@@ -37,8 +38,9 @@ def get_template_metadata(template_type: str):
         raise ValidationError(f"Invalid template type: '{template_type}'. Expected 'letter_of_intent' or 'offer_letter'.")
 
     tmpl = LetterTemplateService.get_active_template(template_type)
-    file_exists = bool(tmpl.storage_path and os.path.exists(tmpl.storage_path))
-    file_size = os.path.getsize(tmpl.storage_path) if file_exists else 0
+    tmpl_path = resolve_storage_path(tmpl.storage_path)
+    file_exists = bool(tmpl_path and os.path.exists(tmpl_path))
+    file_size = os.path.getsize(tmpl_path) if file_exists else 0
 
     return api_response(
         data={
@@ -80,8 +82,9 @@ def upload_master_template(template_type: str):
 
     file = request.files["file"]
     new_tmpl = LetterTemplateService.upload_new_template(template_type, file, user)
-    file_exists = bool(new_tmpl.storage_path and os.path.exists(new_tmpl.storage_path))
-    file_size = os.path.getsize(new_tmpl.storage_path) if file_exists else 0
+    new_tmpl_path = resolve_storage_path(new_tmpl.storage_path)
+    file_exists = bool(new_tmpl_path and os.path.exists(new_tmpl_path))
+    file_size = os.path.getsize(new_tmpl_path) if file_exists else 0
 
     return api_response(
         data={
@@ -107,12 +110,13 @@ def upload_master_template(template_type: str):
 def download_master_template(template_type: str):
     """Download the active master Word template."""
     tmpl = LetterTemplateService.get_active_template(template_type)
+    tmpl_path = resolve_storage_path(tmpl.storage_path)
 
-    if not os.path.exists(tmpl.storage_path):
+    if not os.path.exists(tmpl_path):
         raise NotFoundError("Master template file not found on disk.")
 
     return send_file(
-        tmpl.storage_path,
+        tmpl_path,
         as_attachment=True,
         download_name=tmpl.filename,
         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -132,8 +136,7 @@ def get_candidate_letters(app_id: str):
 
     user_roles = getattr(user, "role_names", []) or []
     can_view = (
-        AuthorizationEvaluator.has_required_permission(user, "candidates:read")
-        or AuthorizationEvaluator.has_required_permission(user, "documents:view")
+        AuthorizationEvaluator.has_required_permission(user, "documents:view")
         or AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
         or AuthorizationEvaluator.has_required_permission(user, "users:manage")
         or AuthorizationEvaluator.has_required_permission(user, "letters:view")
@@ -167,8 +170,6 @@ def update_candidate_letter(app_id: str, letter_type: str):
     user_roles = getattr(user, "role_names", []) or []
     can_edit = (
         AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
-        or AuthorizationEvaluator.has_required_permission(user, "candidates:edit")
-        or AuthorizationEvaluator.has_required_permission(user, "candidates:write")
         or AuthorizationEvaluator.has_required_permission(user, "users:manage")
         or AuthorizationEvaluator.has_required_permission(user, "letters:generate")
         or "admin" in user_roles
@@ -248,8 +249,6 @@ def update_joining_date(app_id: str):
     user_roles = getattr(user, "role_names", []) or []
     can_edit = (
         AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
-        or AuthorizationEvaluator.has_required_permission(user, "candidates:edit")
-        or AuthorizationEvaluator.has_required_permission(user, "candidates:write")
         or AuthorizationEvaluator.has_required_permission(user, "users:manage")
         or AuthorizationEvaluator.has_required_permission(user, "letters:generate")
         or "admin" in user_roles
@@ -305,7 +304,6 @@ def download_candidate_letter(app_id: str, letter_type: str):
     user_roles = getattr(user, "role_names", []) or []
     can_download = (
         AuthorizationEvaluator.has_required_permission(user, "documents:view")
-        or AuthorizationEvaluator.has_required_permission(user, "candidates:read")
         or AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
         or AuthorizationEvaluator.has_required_permission(user, "users:manage")
         or AuthorizationEvaluator.has_required_permission(user, "letters:view")
@@ -366,11 +364,10 @@ def download_candidate_letter(app_id: str, letter_type: str):
             resp.headers["Cache-Control"] = "private, max-age=3600"
             return resp
 
-    if not os.path.exists(letter.docx_storage_path):
-        raise NotFoundError("DOCX file not found on disk.")
+    docx_path = LetterGenerationService.ensure_candidate_docx_exists(letter)
 
     resp = send_file(
-        letter.docx_storage_path,
+        docx_path,
         as_attachment=True,
         download_name=f"{letter_type}_{safe_name}.docx",
         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

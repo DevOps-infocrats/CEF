@@ -92,8 +92,20 @@ def resolve_document_file_path(doc: Optional[CandidateDocument]) -> Optional[str
         if os.path.exists(app_rel_path):
             return app_rel_path
 
-    return None
+def _clean_str(val: Any) -> Optional[str]:
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s if s else None
 
+
+def _clean_decimal(val: Any) -> Optional[Decimal]:
+    if val is None or val == "":
+        return None
+    try:
+        return Decimal(str(val))
+    except Exception:
+        return None
 
 
 class CandidateService:
@@ -238,16 +250,23 @@ class CandidateService:
         app_number = generate_application_number()
 
         # Handle permanent address sync if flagged
-        is_same = data.get("is_permanent_same", False)
-        perm_line1 = data["current_address_line1"] if is_same else data["permanent_address_line1"]
-        perm_line2 = data.get("current_address_line2") if is_same else data.get("permanent_address_line2")
-        perm_city = data["current_city"] if is_same else data["permanent_city"]
-        perm_state = data["current_state"] if is_same else data["permanent_state"]
-        perm_pincode = data["current_pincode"] if is_same else data["permanent_pincode"]
-        perm_country = data.get("current_country", "India") if is_same else data.get("permanent_country", "India")
+        is_same = bool(data.get("is_permanent_same", False))
+        if is_same:
+            perm_line1 = data.get("current_address_line1")
+            perm_line2 = data.get("current_address_line2")
+            perm_city = data.get("current_city")
+            perm_state = data.get("current_state")
+            perm_pincode = data.get("current_pincode")
+            perm_country = data.get("current_country") or "India"
+        else:
+            perm_line1 = data.get("permanent_address_line1")
+            perm_line2 = data.get("permanent_address_line2")
+            perm_city = data.get("permanent_city")
+            perm_state = data.get("permanent_state")
+            perm_pincode = data.get("permanent_pincode")
+            perm_country = data.get("permanent_country") or "India"
 
-        # Resolve documents to link
-        # Find unattached documents for this user
+        # Resolve documents to link: link whatever unattached documents the user uploaded (uploads are optional)
         staged_docs: List[CandidateDocument] = list(
             db.session.execute(
                 select(CandidateDocument)
@@ -255,25 +274,6 @@ class CandidateService:
                 .where(CandidateDocument.application_id.is_(None))
             ).scalars().all()
         )
-
-        staged_categories = {doc.category for doc in staged_docs}
-
-        # Validate mandatory documents:
-        # 1. Aadhaar Card
-        # 2. PAN Card
-        # 3. Bank Passbook OR Cancelled Cheque (at least one)
-        missing_docs = []
-        if "aadhaar_card" not in staged_categories:
-            missing_docs.append("Aadhaar Card")
-        if "pan_card" not in staged_categories:
-            missing_docs.append("PAN Card")
-        if not ("bank_passbook" in staged_categories or "cancelled_cheque" in staged_categories):
-            missing_docs.append("Bank Passbook OR Cancelled Cheque")
-
-        if missing_docs:
-            raise ValidationError(
-                f"Mandatory document upload required before submission: {', '.join(missing_docs)}."
-            )
 
         with atomic():
             # Prepare district and block strings & records
@@ -306,7 +306,7 @@ class CandidateService:
                         )
                     )
             else:
-                district_summary = data.get("district", "").strip()
+                district_summary = (data.get("district") or "").strip()
                 if district_summary:
                     for d_name in [s.strip() for s in district_summary.split(",") if s.strip()]:
                         app_districts.append(
@@ -329,7 +329,6 @@ class CandidateService:
                     )
                 block_summary = ", ".join(b.name for b in blk_models)
                 for b in blk_models:
-                    # Avoid N+1 query: map district name directly from dist_map instead of b.district
                     d_name = dist_map.get(b.district_id)
                     app_blocks.append(
                         CandidateApplicationBlock(
@@ -342,7 +341,7 @@ class CandidateService:
                         )
                     )
             else:
-                block_summary = data.get("block", "").strip()
+                block_summary = (data.get("block") or "").strip()
                 if block_summary:
                     for b_name in [s.strip() for s in block_summary.split(",") if s.strip()]:
                         app_blocks.append(
@@ -356,46 +355,45 @@ class CandidateService:
                             )
                         )
 
+            raw_email = _clean_str(data.get("email"))
+            raw_pan = _clean_str(data.get("pan_number"))
+            raw_ifsc = _clean_str(data.get("ifsc_code"))
+
             application = CandidateApplication(
                 id=app_id,
                 application_number=app_number,
                 user_id=user_id,
-                hero_category=data["hero_category"].strip(),
-                role_applied=data["role_applied"].strip(),
-                full_name=data["full_name"].strip(),
-                mobile_number=data["mobile_number"].strip(),
-                email=data["email"].strip().lower(),
-                aadhaar_number=data["aadhaar_number"].strip(),
-                pan_number=data["pan_number"].strip().upper(),
-                current_address_line1=data["current_address_line1"].strip(),
-                current_address_line2=data.get("current_address_line2"),
-                current_city=data["current_city"].strip(),
-                current_state=data["current_state"].strip(),
-                current_pincode=data["current_pincode"].strip(),
-                current_country=data.get("current_country", "India"),
+                hero_category=_clean_str(data.get("hero_category")) or "Hero 1",
+                role_applied=_clean_str(data.get("role_applied")) or "",
+                full_name=_clean_str(data.get("full_name")),
+                mobile_number=_clean_str(data.get("mobile_number")),
+                email=raw_email.lower() if raw_email else None,
+                aadhaar_number=_clean_str(data.get("aadhaar_number")),
+                pan_number=raw_pan.upper() if raw_pan else None,
+                current_address_line1=_clean_str(data.get("current_address_line1")),
+                current_address_line2=_clean_str(data.get("current_address_line2")),
+                current_city=_clean_str(data.get("current_city")),
+                current_state=_clean_str(data.get("current_state")),
+                current_pincode=_clean_str(data.get("current_pincode")),
+                current_country=_clean_str(data.get("current_country")) or "India",
                 is_permanent_same=is_same,
-                permanent_address_line1=perm_line1.strip(),
-                permanent_address_line2=perm_line2,
-                permanent_city=perm_city.strip(),
-                permanent_state=perm_state.strip(),
-                permanent_pincode=perm_pincode.strip(),
-                permanent_country=perm_country,
-                account_holder_name=data["account_holder_name"].strip(),
-                bank_name=data["bank_name"].strip(),
-                account_number=data["account_number"].strip(),
-                ifsc_code=data["ifsc_code"].strip().upper(),
-                branch_name=data.get("branch_name"),
-                circle=data["circle"].strip(),
-                district=district_summary,
-                block=block_summary,
-                current_salary=Decimal(str(data["current_salary"])),
-                asking_salary=Decimal(str(data["asking_salary"])),
-                negotiated_salary=(
-                    Decimal(str(data["negotiated_salary"]))
-                    if data.get("negotiated_salary") is not None
-                    and str(data["negotiated_salary"]).strip() != ""
-                    else None
-                ),
+                permanent_address_line1=_clean_str(perm_line1),
+                permanent_address_line2=_clean_str(perm_line2),
+                permanent_city=_clean_str(perm_city),
+                permanent_state=_clean_str(perm_state),
+                permanent_pincode=_clean_str(perm_pincode),
+                permanent_country=_clean_str(perm_country) or "India",
+                account_holder_name=_clean_str(data.get("account_holder_name")),
+                bank_name=_clean_str(data.get("bank_name")),
+                account_number=_clean_str(data.get("account_number")),
+                ifsc_code=raw_ifsc.upper() if raw_ifsc else None,
+                branch_name=_clean_str(data.get("branch_name")),
+                circle=_clean_str(data.get("circle")),
+                district=_clean_str(district_summary),
+                block=_clean_str(block_summary),
+                current_salary=_clean_decimal(data.get("current_salary")),
+                asking_salary=_clean_decimal(data.get("asking_salary")),
+                negotiated_salary=_clean_decimal(data.get("negotiated_salary")),
                 status=APPLICATION_STATUS_PENDING,
             )
 
@@ -424,8 +422,8 @@ class CandidateService:
                 user_agent=user_agent,
                 details={
                     "application_number": app_number,
-                    "hero_category": data["hero_category"],
-                    "role_applied": data["role_applied"],
+                    "hero_category": application.hero_category,
+                    "role_applied": application.role_applied,
                     "document_count": len(staged_docs),
                 },
             )
@@ -440,6 +438,134 @@ class CandidateService:
             # Pre-dump response payload before transaction commit so no expired-attribute queries are fired
             from app.modules.candidates.routes import _response_schema
             application._cached_dump = _response_schema.dump(application)
+
+        return application
+
+    @staticmethod
+    def update_application(
+        application: CandidateApplication,
+        data: Dict[str, Any],
+        user: Any,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> CandidateApplication:
+        """Update an existing candidate application, preserving existing values for omitted fields."""
+        with atomic():
+            field_keys = [
+                "hero_category", "role_applied", "full_name", "mobile_number", "email",
+                "aadhaar_number", "pan_number", "current_address_line1", "current_address_line2",
+                "current_city", "current_state", "current_pincode", "current_country",
+                "permanent_address_line1", "permanent_address_line2", "permanent_city",
+                "permanent_state", "permanent_pincode", "permanent_country",
+                "account_holder_name", "bank_name", "account_number", "ifsc_code",
+                "branch_name", "circle", "current_salary", "asking_salary", "negotiated_salary",
+            ]
+            for key in field_keys:
+                if key in data:
+                    val = data[key]
+                    if key in ("current_salary", "asking_salary", "negotiated_salary"):
+                        setattr(application, key, _clean_decimal(val))
+                    elif key in ("email",):
+                        cleaned = _clean_str(val)
+                        setattr(application, key, cleaned.lower() if cleaned else None)
+                    elif key in ("pan_number", "ifsc_code"):
+                        cleaned = _clean_str(val)
+                        setattr(application, key, cleaned.upper() if cleaned else None)
+                    else:
+                        setattr(application, key, _clean_str(val))
+
+            if "is_permanent_same" in data:
+                application.is_permanent_same = bool(data["is_permanent_same"])
+                if application.is_permanent_same:
+                    application.permanent_address_line1 = application.current_address_line1
+                    application.permanent_address_line2 = application.current_address_line2
+                    application.permanent_city = application.current_city
+                    application.permanent_state = application.current_state
+                    application.permanent_pincode = application.current_pincode
+                    application.permanent_country = application.current_country or "India"
+
+            # Update districts / blocks if supplied
+            if "district_ids" in data or "district" in data:
+                district_ids = data.get("district_ids") or []
+                if district_ids:
+                    dist_models = list(
+                        db.session.execute(
+                            select(LocationDistrict).where(LocationDistrict.id.in_(district_ids))
+                        ).scalars().all()
+                    )
+                    application.district = ", ".join(d.name for d in dist_models)
+                    db.session.execute(
+                        CandidateApplicationDistrict.__table__.delete().where(
+                            CandidateApplicationDistrict.application_id == application.id
+                        )
+                    )
+                    for d in dist_models:
+                        db.session.add(
+                            CandidateApplicationDistrict(
+                                id=uuid.uuid4(),
+                                application_id=application.id,
+                                district_id=d.id,
+                                district_name=d.name,
+                            )
+                        )
+                elif "district" in data:
+                    application.district = _clean_str(data["district"])
+
+            if "block_ids" in data or "block" in data:
+                block_ids = data.get("block_ids") or []
+                if block_ids:
+                    blk_models = list(
+                        db.session.execute(
+                            select(LocationBlock).where(LocationBlock.id.in_(block_ids))
+                        ).scalars().all()
+                    )
+                    application.block = ", ".join(b.name for b in blk_models)
+                    db.session.execute(
+                        CandidateApplicationBlock.__table__.delete().where(
+                            CandidateApplicationBlock.application_id == application.id
+                        )
+                    )
+                    for b in blk_models:
+                        db.session.add(
+                            CandidateApplicationBlock(
+                                id=uuid.uuid4(),
+                                application_id=application.id,
+                                block_id=b.id,
+                                district_id=b.district_id,
+                                block_name=b.name,
+                                district_name=b.district.name if b.district else None,
+                            )
+                        )
+                elif "block" in data:
+                    application.block = _clean_str(data["block"])
+
+            # Link any newly staged documents for this user
+            staged_docs = list(
+                db.session.execute(
+                    select(CandidateDocument)
+                    .where(CandidateDocument.user_id == user.id)
+                    .where(CandidateDocument.application_id.is_(None))
+                ).scalars().all()
+            )
+            for doc in staged_docs:
+                doc.application_id = application.id
+
+            CandidateService.initialize_verification_checklist(application)
+
+            audit = AuditLog(
+                user_id=user.id,
+                action="CANDIDATE_APPLICATION_UPDATED",
+                resource="CandidateApplication",
+                resource_id=str(application.id),
+                ip_address=ip_address,
+                user_agent=user_agent,
+                details={
+                    "application_number": application.application_number,
+                    "updated_fields": list(data.keys()),
+                },
+            )
+            db.session.add(audit)
+            db.session.commit()
 
         return application
 
@@ -591,9 +717,6 @@ class CandidateService:
         any_done = any(item.status == VERIFICATION_STATUS_DONE for item in items)
 
         if application.status == APPLICATION_STATUS_APPROVED:
-            if not all_mandatory_done:
-                application.status = APPLICATION_STATUS_IN_PROGRESS
-                return APPLICATION_STATUS_IN_PROGRESS
             return APPLICATION_STATUS_APPROVED
 
         if application.status == APPLICATION_STATUS_REJECTED:
@@ -1090,58 +1213,8 @@ class CandidateService:
                     })
                     continue
 
-                # Verify checklist items
+                # Ensure verification checklist exists
                 CandidateService.initialize_verification_checklist(application)
-                items = list(
-                    db.session.execute(
-                        select(CandidateVerificationItem).where(
-                            CandidateVerificationItem.application_id == application.id
-                        )
-                    ).scalars().all()
-                )
-
-                item_status_map = {item.item_key: item.status for item in items}
-                mandatory_detail_keys = [
-                    "personal_info",
-                    "contact_info",
-                    "current_address",
-                    "permanent_address",
-                    "location_allocation",
-                    "bank_details",
-                    "current_salary",
-                    "asking_salary",
-                ]
-                if "negotiated_salary" in item_status_map:
-                    mandatory_detail_keys.append("negotiated_salary")
-
-                details_incomplete = [
-                    k for k in mandatory_detail_keys if item_status_map.get(k) != VERIFICATION_STATUS_DONE
-                ]
-                doc_aadhaar_done = item_status_map.get("doc_aadhaar") == VERIFICATION_STATUS_DONE
-                doc_pan_done = item_status_map.get("doc_pan") == VERIFICATION_STATUS_DONE
-                bank_doc_done = (
-                    item_status_map.get("doc_bank_passbook") == VERIFICATION_STATUS_DONE
-                    or item_status_map.get("doc_cancelled_cheque") == VERIFICATION_STATUS_DONE
-                )
-
-                missing_reasons = []
-                if details_incomplete:
-                    missing_reasons.append(f"Incomplete detail checks: {', '.join(details_incomplete)}")
-                if not doc_aadhaar_done:
-                    missing_reasons.append("Aadhaar Card is not verified")
-                if not doc_pan_done:
-                    missing_reasons.append("PAN Card is not verified")
-                if not bank_doc_done:
-                    missing_reasons.append("Bank passbook or cheque is not verified")
-
-                if missing_reasons:
-                    failed_items.append({
-                        "id": str(application.id),
-                        "application_number": application.application_number,
-                        "candidate_name": application.full_name,
-                        "reason": "; ".join(missing_reasons),
-                    })
-                    continue
 
                 # Execute individual atomic approval for safety and transaction isolation
                 with atomic():
@@ -1291,66 +1364,11 @@ class CandidateService:
         if not application:
             raise NotFoundError("Application record not found.")
 
+        if application.status == APPLICATION_STATUS_REJECTED:
+            raise ValidationError("Cannot approve an already rejected application.")
+
         # Ensure checklist is loaded
         CandidateService.initialize_verification_checklist(application)
-
-        items = list(
-            db.session.execute(
-                select(CandidateVerificationItem).where(
-                    CandidateVerificationItem.application_id == application.id
-                )
-            ).scalars().all()
-        )
-
-        item_status_map = {item.item_key: item.status for item in items}
-        mandatory_items = [i for i in items if i.is_mandatory]
-
-        # Verify details
-        mandatory_detail_keys = [
-            "personal_info",
-            "contact_info",
-            "current_address",
-            "permanent_address",
-            "location_allocation",
-            "bank_details",
-            "current_salary",
-            "asking_salary",
-        ]
-        if "negotiated_salary" in item_status_map:
-            mandatory_detail_keys.append("negotiated_salary")
-
-        details_incomplete = [k for k in mandatory_detail_keys if item_status_map.get(k) != VERIFICATION_STATUS_DONE]
-
-        # Verify mandatory documents
-        doc_aadhaar_done = item_status_map.get("doc_aadhaar") == VERIFICATION_STATUS_DONE
-        doc_pan_done = item_status_map.get("doc_pan") == VERIFICATION_STATUS_DONE
-        bank_doc_done = (
-            item_status_map.get("doc_bank_passbook") == VERIFICATION_STATUS_DONE
-            or item_status_map.get("doc_cancelled_cheque") == VERIFICATION_STATUS_DONE
-        )
-
-        missing_requirements = []
-        if details_incomplete:
-            missing_requirements.append(f"Incomplete detail checks: {', '.join(details_incomplete)}")
-        if not doc_aadhaar_done:
-            missing_requirements.append("Aadhaar Card is not verified")
-        if not doc_pan_done:
-            missing_requirements.append("PAN Card is not verified")
-        if not bank_doc_done:
-            missing_requirements.append("Bank passbook or cancelled cheque is not verified")
-
-        any_other_mandatory_pending = [
-            i.item_label for i in mandatory_items
-            if i.status != VERIFICATION_STATUS_DONE and i.item_key not in ("doc_bank_passbook", "doc_cancelled_cheque")
-        ]
-        for label in any_other_mandatory_pending:
-            if label not in missing_requirements:
-                missing_requirements.append(f"{label} is not verified")
-
-        if missing_requirements:
-            raise ValidationError(
-                f"Candidate cannot be approved until all required checks are completed: {'; '.join(missing_requirements)}."
-            )
 
         with atomic():
             application.status = APPLICATION_STATUS_APPROVED

@@ -82,6 +82,7 @@ interface DocumentUploadSectionProps {
   onSubmitFinal: () => void;
   isSubmitting: boolean;
   submissionError: string | null;
+  isEditing?: boolean;
 }
 
 export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
@@ -95,6 +96,7 @@ export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
   onSubmitFinal,
   isSubmitting,
   submissionError,
+  isEditing = false,
 }) => {
   const [localError, setLocalError] = useState<string | null>(null);
   const fileInputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
@@ -148,12 +150,12 @@ export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
   };
 
   // Masking helpers for summary review
-  const maskAadhaar = (num: string) =>
-    num && num.length >= 4 ? `•••• •••• ${num.slice(-4)}` : '••••';
-  const maskPAN = (pan: string) =>
-    pan && pan.length >= 5 ? `•••••${pan.slice(-5).toUpperCase()}` : '•••••';
-  const maskAccount = (acc: string) =>
-    acc && acc.length >= 4 ? `••••••••${acc.slice(-4)}` : '••••';
+  const maskAadhaar = (num?: string) =>
+    num && num.length >= 4 ? `•••• •••• ${num.slice(-4)}` : (num || '—');
+  const maskPAN = (pan?: string) =>
+    pan && pan.length >= 5 ? `•••••${pan.slice(-5).toUpperCase()}` : (pan ? pan.toUpperCase() : '—');
+  const maskAccount = (acc?: string) =>
+    acc && acc.length >= 4 ? `••••••••${acc.slice(-4)}` : (acc || '—');
 
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -298,28 +300,30 @@ export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
         </div>
       )}
 
-      {/* Mandatory Requirements Status Banner */}
+      {/* Supporting Documents Status Banner */}
       <div
         className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
           allMandatorySatisfied
             ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
-            : 'bg-amber-50/80 border-amber-300 text-amber-900'
+            : 'bg-indigo-50/70 border-indigo-200 text-slate-800'
         }`}
       >
         <div className="flex items-center gap-2.5">
           {allMandatorySatisfied ? (
             <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
           ) : (
-            <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+            <FileCheck2 className="w-5 h-5 text-indigo-600 flex-shrink-0" />
           )}
           <div className="text-xs">
             <p className="font-bold">
               {allMandatorySatisfied
-                ? 'All Mandatory Documents Uploaded'
-                : 'Mandatory Documents Required'}
+                ? 'All Supporting Documents Attached'
+                : 'Document Uploads (Optional)'}
             </p>
             <p className="text-[11px] opacity-90 mt-0.5">
-              Aadhaar Card, PAN Card, and at least one Bank proof (Passbook OR Cancelled Cheque) must be verified.
+              {allMandatorySatisfied
+                ? 'Aadhaar Card, PAN Card, and Bank proof have been staged for verification.'
+                : 'Document uploads are optional. You can upload Aadhaar, PAN, and Bank proof now or later during verification.'}
             </p>
           </div>
         </div>
@@ -327,24 +331,24 @@ export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
         <div className="flex items-center gap-1.5 text-xs font-semibold">
           <span
             className={`px-2 py-0.5 rounded ${
-              hasAadhaar ? 'bg-emerald-200 text-emerald-800' : 'bg-amber-200 text-amber-900'
+              hasAadhaar ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-200 text-slate-700'
             }`}
           >
-            Aadhaar: {hasAadhaar ? '✓' : 'Missing'}
+            Aadhaar: {hasAadhaar ? '✓' : 'Optional'}
           </span>
           <span
             className={`px-2 py-0.5 rounded ${
-              hasPan ? 'bg-emerald-200 text-emerald-800' : 'bg-amber-200 text-amber-900'
+              hasPan ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-200 text-slate-700'
             }`}
           >
-            PAN: {hasPan ? '✓' : 'Missing'}
+            PAN: {hasPan ? '✓' : 'Optional'}
           </span>
           <span
             className={`px-2 py-0.5 rounded ${
-              hasBankDoc ? 'bg-emerald-200 text-emerald-800' : 'bg-amber-200 text-amber-900'
+              hasBankDoc ? 'bg-emerald-200 text-emerald-800' : 'bg-slate-200 text-slate-700'
             }`}
           >
-            Bank Doc: {hasBankDoc ? '✓' : 'Missing'}
+            Bank Doc: {hasBankDoc ? '✓' : 'Optional'}
           </span>
         </div>
       </div>
@@ -474,10 +478,10 @@ export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
               </button>
             </div>
             <p className="text-slate-600 leading-relaxed">
-              {formData.current_address_line1}, {formData.current_city}, {formData.current_state} — {formData.current_pin_code}
+              {formData.current_address_line1 || '—'}{formData.current_city ? `, ${formData.current_city}` : ''}{formData.current_state ? `, ${formData.current_state}` : ''}{formData.current_pin_code ? ` — ${formData.current_pin_code}` : ''}
               <br />
               <span className="text-slate-400">
-                {formData.is_permanent_same ? '(Permanent same as current)' : 'Separate permanent address on file'}
+                {formData.is_permanent_same ? '(Permanent same as current)' : (formData.permanent_address_line1 || formData.permanent_city ? `${formData.permanent_address_line1 || ''}${formData.permanent_city ? `, ${formData.permanent_city}` : ''}${formData.permanent_state ? `, ${formData.permanent_state}` : ''}${formData.permanent_pin_code ? ` — ${formData.permanent_pin_code}` : ''}` : 'Permanent address not provided')}
               </span>
             </p>
           </div>
@@ -497,9 +501,9 @@ export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
               </button>
             </div>
             <p className="text-slate-600 leading-relaxed">
-              {formData.bank_name} • {formData.account_holder_name}
+              {formData.bank_name || '—'} • {formData.account_holder_name || '—'}
               <br />
-              Account: <span className="font-mono">{maskAccount(formData.account_number)}</span> • IFSC: <span className="font-mono uppercase">{formData.ifsc_code}</span>
+              Account: <span className="font-mono">{maskAccount(formData.account_number)}</span> • IFSC: <span className="font-mono uppercase">{formData.ifsc_code || '—'}</span>
             </p>
           </div>
 
@@ -518,9 +522,9 @@ export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
               </button>
             </div>
             <p className="text-slate-600 leading-relaxed">
-              Circle: <strong>{formData.circle}</strong> • District: <strong>{formData.district}</strong> • Block: <strong>{formData.block}</strong>
+              Circle: <strong>{formData.circle || '—'}</strong> • District: <strong>{formData.district || '—'}</strong> • Block: <strong>{formData.block || '—'}</strong>
               <br />
-              Current: <strong>₹{Number(formData.current_salary).toLocaleString('en-IN')}</strong> • Asking: <strong>₹{Number(formData.asking_salary).toLocaleString('en-IN')}</strong>
+              Current: <strong>{formData.current_salary !== undefined && formData.current_salary !== '' ? `₹${Number(formData.current_salary).toLocaleString('en-IN')}` : '—'}</strong> • Asking: <strong>{formData.asking_salary !== undefined && formData.asking_salary !== '' ? `₹${Number(formData.asking_salary).toLocaleString('en-IN')}` : '—'}</strong>
               {formData.negotiated_salary !== undefined && formData.negotiated_salary !== '' && (
                 <span> • Negotiated: <strong>₹{Number(formData.negotiated_salary).toLocaleString('en-IN')}</strong></span>
               )}
@@ -543,19 +547,19 @@ export const DocumentUploadSection: React.FC<DocumentUploadSectionProps> = ({
           type="button"
           variant="primary"
           size="lg"
-          disabled={!allMandatorySatisfied || isSubmitting || isUploading}
+          disabled={isSubmitting || isUploading}
           isLoading={isSubmitting}
           onClick={onSubmitFinal}
           rightIcon={<CheckCircle2 className="w-4 h-4" />}
           className="w-full sm:w-auto"
         >
-          Submit Application
+          {isEditing ? 'Save Changes' : 'Submit Application'}
         </GlassButton>
       </div>
 
       {!allMandatorySatisfied && (
-        <p className="text-center text-xs text-rose-600 font-medium">
-          * Please upload all mandatory documents above to enable final submission.
+        <p className="text-center text-xs text-slate-500 font-medium">
+          Document uploads are optional. You may submit without uploading and attach documents later.
         </p>
       )}
     </div>

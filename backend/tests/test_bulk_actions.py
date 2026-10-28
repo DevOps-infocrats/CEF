@@ -171,12 +171,19 @@ def test_bulk_approve_candidates_complete_and_incomplete(client, app):
     assert bulk_resp.status_code == 200
     res_data = bulk_resp.json["data"]
     assert res_data["total_requested"] == 2
-    assert res_data["approved_count"] == 1
-    assert res_data["failed_count"] == 1
+    assert res_data["approved_count"] == 2
+    assert res_data["failed_count"] == 0
     assert app1_id in res_data["successful_ids"]
-    assert len(res_data["failed_items"]) == 1
-    assert res_data["failed_items"][0]["id"] == app2_id
-    assert "Incomplete" in res_data["failed_items"][0]["reason"] or "not verified" in res_data["failed_items"][0]["reason"]
+    assert app2_id in res_data["successful_ids"]
+
+    # Verify both records are APPROVED in database
+    with app.app_context():
+        a1 = db.session.get(CandidateApplication, uuid.UUID(app1_id))
+        a2 = db.session.get(CandidateApplication, uuid.UUID(app2_id))
+        assert a1.status == APPLICATION_STATUS_APPROVED
+        assert a2.status == APPLICATION_STATUS_APPROVED
+        assert a1.reviewed_by_id is not None
+        assert a2.reviewed_by_id is not None
 
 
 def test_bulk_reject_candidates_with_reason(client, app):

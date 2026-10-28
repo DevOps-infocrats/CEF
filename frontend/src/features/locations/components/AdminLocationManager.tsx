@@ -575,7 +575,6 @@ export const AdminLocationManager: React.FC = () => {
               value={newStateName}
               onChange={(e) => setNewStateName(e.target.value)}
               placeholder="e.g. Gujarat"
-              required
             />
 
             <GlassInput
@@ -632,7 +631,6 @@ export const AdminLocationManager: React.FC = () => {
               value={newDistrictName}
               onChange={(e) => setNewDistrictName(e.target.value)}
               placeholder="e.g. Bikaner"
-              required
             />
 
             <GlassInput
@@ -688,7 +686,6 @@ export const AdminLocationManager: React.FC = () => {
                 value={targetDistrictIdForBlock}
                 onChange={(e) => setTargetDistrictIdForBlock(e.target.value)}
                 className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs font-semibold bg-white text-slate-800 outline-none"
-                required
               >
                 <option value="">Select district...</option>
                 {districts.map((d) => (
@@ -704,7 +701,6 @@ export const AdminLocationManager: React.FC = () => {
               value={newBlockName}
               onChange={(e) => setNewBlockName(e.target.value)}
               placeholder="e.g. Central Block"
-              required
             />
 
             <GlassInput

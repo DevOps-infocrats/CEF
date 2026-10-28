@@ -21,6 +21,7 @@ import {
   Send,
   Download,
   AlertTriangle,
+  AlertCircle,
   CheckCircle2,
   ArrowLeft,
   Loader2,
@@ -929,16 +930,31 @@ export const CandidateLetterReviewPage: React.FC = () => {
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Recipient Email:</span>
-              <span className="font-mono font-bold text-indigo-700">{application.email}</span>
+              <span className="font-mono font-bold text-indigo-700">
+                {application.email || <span className="text-rose-600 font-normal">Not Provided</span>}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Service Start / Joining Date:</span>
-              <span className="font-bold text-slate-900">{loiJoining || offerJoining}</span>
+              <span className="font-bold text-slate-900">{loiJoining || offerJoining || 'Not specified'}</span>
             </div>
           </div>
 
+          {/* Missing Email Alert */}
+          {(!application.email || !application.email.includes('@')) && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 flex items-start gap-2.5 text-xs">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">Candidate has no registered email address.</p>
+                <p className="mt-0.5 text-rose-800">
+                  Email dispatch cannot proceed until a valid recipient email is provided. The candidate remains approved and their generated Offer Letter and Letter of Intent are preserved and available for download.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* SMTP Delivery Channel Status */}
-          {smtpStatus && (
+          {smtpStatus && application.email && application.email.includes('@') && (
             <div
               className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
                 smtpStatus.mode === 'smtp'
@@ -1080,10 +1096,20 @@ export const CandidateLetterReviewPage: React.FC = () => {
             <GlassButton
               type="button"
               variant="primary"
-              disabled={!confirmCheckbox || sendLettersMutation.isPending}
+              disabled={
+                !confirmCheckbox ||
+                sendLettersMutation.isPending ||
+                !application.email ||
+                !application.email.includes('@')
+              }
               isLoading={sendLettersMutation.isPending}
               onClick={handleConfirmSend}
-              className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white"
+              className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50"
+              title={
+                !application.email || !application.email.includes('@')
+                  ? 'Candidate email is required to dispatch emails'
+                  : undefined
+              }
             >
               Confirm & Email Documents
             </GlassButton>
@@ -1138,7 +1164,6 @@ export const CandidateLetterReviewPage: React.FC = () => {
               error={joiningDateError || undefined}
               helperText="Choose reporting date. Standard format: DD/MM/YYYY"
               leftIcon={<Calendar className="w-4 h-4 text-indigo-600" />}
-              required
             />
 
             {joiningDateInput && isValidJoiningDate(joiningDateInput) && (

@@ -13,18 +13,21 @@ import {
   Landmark,
   Compass,
   FileCheck,
+  Edit,
 } from 'lucide-react';
 
 interface ApplicationsListProps {
   applications: CandidateApplicationResponse[];
   isLoading: boolean;
   onNewApplication: () => void;
+  onEditApplication?: (app: CandidateApplicationResponse) => void;
 }
 
 export const ApplicationsList: React.FC<ApplicationsListProps> = ({
   applications,
   isLoading,
   onNewApplication,
+  onEditApplication,
 }) => {
   const [selectedApp, setSelectedApp] = useState<CandidateApplicationResponse | null>(null);
 
@@ -126,11 +129,21 @@ export const ApplicationsList: React.FC<ApplicationsListProps> = ({
               </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-end">
+            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+              {onEditApplication && (
+                <button
+                  type="button"
+                  onClick={() => onEditApplication(app)}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-indigo-700 transition-colors"
+                >
+                  <Edit className="w-3.5 h-3.5" />
+                  <span>Edit Form</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setSelectedApp(app)}
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 hover:text-indigo-800 hover:underline"
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 hover:text-indigo-800 hover:underline ml-auto"
               >
                 <Eye className="w-3.5 h-3.5" />
                 <span>View Full Details</span>
@@ -337,7 +350,20 @@ export const ApplicationsList: React.FC<ApplicationsListProps> = ({
               </div>
             )}
 
-            <div className="pt-2 flex justify-end">
+            <div className="pt-2 flex justify-end gap-3">
+              {onEditApplication && (
+                <GlassButton
+                  variant="primary"
+                  onClick={() => {
+                    const toEdit = selectedApp;
+                    setSelectedApp(null);
+                    onEditApplication(toEdit);
+                  }}
+                  leftIcon={<Edit className="w-4 h-4" />}
+                >
+                  Edit Application
+                </GlassButton>
+              )}
               <GlassButton variant="secondary" onClick={() => setSelectedApp(null)}>
                 Close Window
               </GlassButton>

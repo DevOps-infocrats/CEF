@@ -289,7 +289,6 @@ export const ManageRolesManager: React.FC = () => {
             leftIcon={<Briefcase className="w-4 h-4 text-indigo-600" />}
             value={newRoleForm.name}
             onChange={(e) => setNewRoleForm({ ...newRoleForm, name: e.target.value })}
-            required
           />
 
           <div>
@@ -393,7 +392,6 @@ export const ManageRolesManager: React.FC = () => {
               leftIcon={<Briefcase className="w-4 h-4 text-indigo-600" />}
               value={editRoleForm.name}
               onChange={(e) => setEditRoleForm({ ...editRoleForm, name: e.target.value })}
-              required
             />
 
             <div>

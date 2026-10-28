@@ -140,44 +140,116 @@ def update_cell_value_preserving_style(cell, new_value: str) -> None:
 set_cell_text_preserve_style = update_cell_value_preserving_style
 
 
+def convert_docx_to_pdf_libreoffice(docx_path: str, pdf_path: str) -> bool:
+    """Convert a DOCX file to PDF using headless LibreOffice (Linux & Windows)."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    candidate_bins = [
+        shutil.which("libreoffice"),
+        shutil.which("soffice"),
+        "/usr/bin/libreoffice",
+        "/usr/bin/soffice",
+        "/usr/local/bin/libreoffice",
+        "/usr/local/bin/soffice",
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+    ]
+    lo_bin = None
+    for cand in candidate_bins:
+        if cand and os.path.exists(cand):
+            lo_bin = cand
+            break
+
+    if not lo_bin:
+        return False
+
+    abs_docx = os.path.abspath(docx_path)
+    abs_pdf = os.path.abspath(pdf_path)
+    out_dir = os.path.dirname(abs_pdf)
+    os.makedirs(out_dir, exist_ok=True)
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_profile:
+            cmd = [
+                lo_bin,
+                "--headless",
+                f"-env:UserInstallation=file://{temp_profile.replace(os.sep, '/')}",
+                "--convert-to",
+                "pdf:writer_pdf_Export",
+                abs_docx,
+                "--outdir",
+                out_dir,
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            base_name = os.path.splitext(os.path.basename(abs_docx))[0]
+            generated_pdf = os.path.join(out_dir, f"{base_name}.pdf")
+
+            if os.path.exists(generated_pdf):
+                if os.path.abspath(generated_pdf) != abs_pdf:
+                    shutil.move(generated_pdf, abs_pdf)
+                if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
+                    return True
+            elif res.returncode != 0 and current_app:
+                current_app.logger.warning(
+                    f"LibreOffice conversion failed (code {res.returncode}): {res.stderr.decode('utf-8', errors='ignore')}"
+                )
+    except Exception as e:
+        if current_app:
+            current_app.logger.warning(f"LibreOffice conversion failed: {e}")
+
+    return False
+
+
 def convert_docx_to_pdf_native(docx_path: str, pdf_path: str) -> bool:
     """Convert a DOCX file to PDF preserving native fonts, tables, margins, and page breaks."""
     abs_docx = os.path.abspath(docx_path)
     abs_pdf = os.path.abspath(pdf_path)
 
-    # 1. Primary: Windows Word COM automation
-    try:
-        import win32com.client
-        import pythoncom
-
-        pythoncom.CoInitialize()
-        word = None
-        doc = None
+    # 1. Primary for Windows: Word COM automation
+    if os.name == "nt":
         try:
-            word = win32com.client.DispatchEx("Word.Application")
-            word.Visible = False
-            word.DisplayAlerts = False
-            doc = word.Documents.Open(abs_docx, ReadOnly=True)
-            doc.ExportAsFixedFormat(abs_pdf, 17)  # 17 = wdExportFormatPDF
-        finally:
-            if doc:
-                try:
-                    doc.Close(False)
-                except Exception:
-                    pass
-            if word:
-                try:
-                    word.Quit()
-                except Exception:
-                    pass
-            pythoncom.CoUninitialize()
+            import win32com.client
+            import pythoncom
 
-        if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
+            pythoncom.CoInitialize()
+            word = None
+            doc = None
+            try:
+                word = win32com.client.DispatchEx("Word.Application")
+                word.Visible = False
+                word.DisplayAlerts = False
+                doc = word.Documents.Open(abs_docx, ReadOnly=True)
+                doc.ExportAsFixedFormat(abs_pdf, 17)  # 17 = wdExportFormatPDF
+            finally:
+                if doc:
+                    try:
+                        doc.Close(False)
+                    except Exception:
+                        pass
+                if word:
+                    try:
+                        word.Quit()
+                    except Exception:
+                        pass
+                pythoncom.CoUninitialize()
+
+            if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
+                return True
+        except Exception as e:
+            if current_app:
+                current_app.logger.warning(f"Word COM PDF export attempt failed: {e}")
+
+    # 2. LibreOffice (Primary for Linux servers, robust secondary for Windows)
+    try:
+        if convert_docx_to_pdf_libreoffice(abs_docx, abs_pdf):
             return True
     except Exception as e:
-        current_app.logger.warning(f"Word COM PDF export attempt failed: {e}")
+        if current_app:
+            current_app.logger.warning(f"LibreOffice conversion error: {e}")
 
-    # 2. Secondary: docx2pdf
+    # 3. docx2pdf (if available on Windows/macOS)
     try:
         import docx2pdf
 
@@ -185,9 +257,10 @@ def convert_docx_to_pdf_native(docx_path: str, pdf_path: str) -> bool:
         if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
             return True
     except Exception as e:
-        current_app.logger.warning(f"docx2pdf conversion failed: {e}")
+        if current_app:
+            current_app.logger.warning(f"docx2pdf conversion failed: {e}")
 
-    # 3. Fallback: ReportLab
+    # 4. Fallback: ReportLab
     if REPORTLAB_AVAILABLE:
         try:
             c = canvas.Canvas(abs_pdf, pagesize=LETTER_PAGESIZE)
@@ -230,25 +303,77 @@ def convert_docx_to_pdf_native(docx_path: str, pdf_path: str) -> bool:
             if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
                 return True
         except Exception as e:
-            current_app.logger.error(f"ReportLab fallback PDF failed: {e}")
+            if current_app:
+                current_app.logger.error(f"ReportLab fallback PDF failed: {e}")
 
     return False
 
 
+def resolve_storage_path(path: Optional[str]) -> str:
+    """
+    Cross-platform storage path resolver.
+    Normalizes Windows laptop paths, Docker container paths, or relative paths
+    to the active server's local storage directory.
+    """
+    if not path:
+        return ""
+
+    try:
+        storage_root = os.path.abspath(os.path.join(current_app.root_path, "..", "storage"))
+    except Exception:
+        storage_root = os.path.abspath(os.path.join(os.getcwd(), "storage"))
+
+    # If the file already exists directly on disk as specified, return normalized path
+    if os.path.exists(path):
+        return os.path.abspath(path)
+
+    # Clean separators
+    p = str(path).replace("\\", "/")
+
+    # Check for storage subfolders: generated_letters, templates, sent_emails, documents
+    for sub in ("generated_letters", "templates", "sent_emails", "documents"):
+        marker = f"/{sub}/"
+        idx = p.rfind(marker)
+        if idx != -1:
+            rel = p[idx + 1 :]
+            resolved = os.path.abspath(os.path.join(storage_root, *rel.split("/")))
+            os.makedirs(os.path.dirname(resolved), exist_ok=True)
+            return resolved
+        if p.startswith(f"{sub}/"):
+            resolved = os.path.abspath(os.path.join(storage_root, *p.split("/")))
+            os.makedirs(os.path.dirname(resolved), exist_ok=True)
+            return resolved
+
+    # Fallback to storage_root with basename
+    fname = os.path.basename(p)
+    resolved = os.path.abspath(os.path.join(storage_root, fname))
+    os.makedirs(os.path.dirname(resolved), exist_ok=True)
+    return resolved
+
+
 def get_templates_storage_dir() -> str:
-    path = os.path.join(current_app.root_path, "..", "storage", "templates")
+    try:
+        path = os.path.join(current_app.root_path, "..", "storage", "templates")
+    except Exception:
+        path = os.path.join(os.getcwd(), "storage", "templates")
     os.makedirs(path, exist_ok=True)
     return os.path.abspath(path)
 
 
 def get_generated_letters_storage_dir(app_id: str) -> str:
-    path = os.path.join(current_app.root_path, "..", "storage", "generated_letters", str(app_id))
+    try:
+        path = os.path.join(current_app.root_path, "..", "storage", "generated_letters", str(app_id))
+    except Exception:
+        path = os.path.join(os.getcwd(), "storage", "generated_letters", str(app_id))
     os.makedirs(path, exist_ok=True)
     return os.path.abspath(path)
 
 
 def get_sent_emails_storage_dir() -> str:
-    path = os.path.join(current_app.root_path, "..", "storage", "sent_emails")
+    try:
+        path = os.path.join(current_app.root_path, "..", "storage", "sent_emails")
+    except Exception:
+        path = os.path.join(os.getcwd(), "storage", "sent_emails")
     os.makedirs(path, exist_ok=True)
     return os.path.abspath(path)
 
@@ -825,24 +950,20 @@ class LetterTemplateService:
             select(DocumentTemplate)
             .where(DocumentTemplate.template_type == TEMPLATE_TYPE_LOI)
             .where(DocumentTemplate.is_active.is_(True))
-        ).scalar_one_or_none()
+            .order_by(DocumentTemplate.version.desc())
+        ).scalars().first()
+
+        loi_path = os.path.join(storage_dir, "letter_of_intent_v1.docx")
+        if not os.path.exists(loi_path):
+            doc = docx.Document()
+            doc.add_heading("Letter of Intent", 0)
+            doc.add_paragraph("Date: {{current_date}}")
+            doc.add_paragraph("To,\n{{candidate_full_name}}\nAddress: {{candidate_address}}\nMobile: {{candidate_mobile}}\nEmail: {{candidate_email}}")
+            doc.add_paragraph("Dear {{candidate_full_name}},\nWe intend to engage your services as {{approved_role_name}} in {{approved_location}}.")
+            doc.add_paragraph("Start Date of Services: {{joining_date}}")
+            doc.save(loi_path)
 
         if not loi_tmpl:
-            loi_path = os.path.join(storage_dir, "letter_of_intent_v1.docx")
-            ref_src = r"C:\Users\Mayank Office\Downloads\Letter of Intent.docx"
-            if os.path.exists(ref_src):
-                # Copy original master file byte-for-byte without altering formatting or runs
-                shutil.copy2(ref_src, loi_path)
-            elif not os.path.exists(loi_path):
-                # Create basic fallback template only if reference file is not present
-                doc = docx.Document()
-                doc.add_heading("Letter of Intent", 0)
-                doc.add_paragraph("Date: {{current_date}}")
-                doc.add_paragraph("To,\n{{candidate_full_name}}\nAddress: {{candidate_address}}\nMobile: {{candidate_mobile}}\nEmail: {{candidate_email}}")
-                doc.add_paragraph("Dear {{candidate_full_name}},\nWe intend to engage your services as {{approved_role_name}} in {{approved_location}}.")
-                doc.add_paragraph("Start Date of Services: {{joining_date}}")
-                doc.save(loi_path)
-
             loi_tmpl = DocumentTemplate(
                 template_type=TEMPLATE_TYPE_LOI,
                 name="Letter of Intent Master Template",
@@ -853,29 +974,30 @@ class LetterTemplateService:
                 field_mappings=DEFAULT_LOI_MAPPINGS,
             )
             db.session.add(loi_tmpl)
+        else:
+            loi_tmpl.storage_path = resolve_storage_path(loi_tmpl.storage_path)
+            if not os.path.exists(loi_tmpl.storage_path):
+                loi_tmpl.storage_path = loi_path
 
         # Check Offer Letter
         offer_tmpl = db.session.execute(
             select(DocumentTemplate)
             .where(DocumentTemplate.template_type == TEMPLATE_TYPE_OFFER)
             .where(DocumentTemplate.is_active.is_(True))
-        ).scalar_one_or_none()
+            .order_by(DocumentTemplate.version.desc())
+        ).scalars().first()
+
+        offer_path = os.path.join(storage_dir, "offer_letter_v1.docx")
+        if not os.path.exists(offer_path):
+            doc = docx.Document()
+            doc.add_heading("Appointment / Offer Letter", 0)
+            doc.add_paragraph("Ref: {{reference_number}}    Date: {{current_date}}")
+            doc.add_paragraph("To,\nName: {{candidate_full_name}}\nMobile: {{candidate_mobile}}")
+            doc.add_paragraph("Dear {{candidate_full_name}},\nYou have been appointed as {{approved_role_name}} in {{approved_location}}.")
+            doc.add_paragraph("Joining Date: {{joining_date}}")
+            doc.save(offer_path)
 
         if not offer_tmpl:
-            offer_path = os.path.join(storage_dir, "offer_letter_v1.docx")
-            ref_src = r"C:\Users\Mayank Office\Downloads\FFPL.docx"
-            if os.path.exists(ref_src):
-                # Copy original master file byte-for-byte without altering formatting or runs
-                shutil.copy2(ref_src, offer_path)
-            elif not os.path.exists(offer_path):
-                doc = docx.Document()
-                doc.add_heading("Appointment / Offer Letter", 0)
-                doc.add_paragraph("Ref: {{reference_number}}    Date: {{current_date}}")
-                doc.add_paragraph("To,\nName: {{candidate_full_name}}\nMobile: {{candidate_mobile}}")
-                doc.add_paragraph("Dear {{candidate_full_name}},\nYou have been appointed as {{approved_role_name}} in {{approved_location}}.")
-                doc.add_paragraph("Joining Date: {{joining_date}}")
-                doc.save(offer_path)
-
             offer_tmpl = DocumentTemplate(
                 template_type=TEMPLATE_TYPE_OFFER,
                 name="Offer Letter Master Template",
@@ -886,6 +1008,27 @@ class LetterTemplateService:
                 field_mappings=DEFAULT_OFFER_MAPPINGS,
             )
             db.session.add(offer_tmpl)
+        else:
+            offer_tmpl.storage_path = resolve_storage_path(offer_tmpl.storage_path)
+            if not os.path.exists(offer_tmpl.storage_path):
+                offer_tmpl.storage_path = offer_path
+
+        # Self-heal all DocumentTemplate records with outdated Windows paths
+        all_templates = db.session.execute(select(DocumentTemplate)).scalars().all()
+        for t in all_templates:
+            res_t = resolve_storage_path(t.storage_path)
+            if not os.path.exists(res_t):
+                fallback_file = loi_path if t.template_type == TEMPLATE_TYPE_LOI else offer_path
+                res_t = fallback_file
+            t.storage_path = res_t
+
+        # Self-heal all CandidateLetter records with outdated Windows paths
+        all_letters = db.session.execute(select(CandidateLetter)).scalars().all()
+        for l in all_letters:
+            if l.docx_storage_path:
+                l.docx_storage_path = resolve_storage_path(l.docx_storage_path)
+            if l.pdf_storage_path:
+                l.pdf_storage_path = resolve_storage_path(l.pdf_storage_path)
 
         db.session.commit()
 
@@ -905,6 +1048,18 @@ class LetterTemplateService:
 
         if not tmpl:
             raise NotFoundError(f"No active template found for '{template_type}'.")
+
+        resolved = resolve_storage_path(tmpl.storage_path)
+        if not os.path.exists(resolved):
+            base_filename = "letter_of_intent_v1.docx" if template_type == TEMPLATE_TYPE_LOI else "offer_letter_v1.docx"
+            storage_dir = get_templates_storage_dir()
+            v1_path = os.path.join(storage_dir, base_filename)
+            resolved = v1_path
+
+        if tmpl.storage_path != resolved:
+            tmpl.storage_path = resolved
+            db.session.commit()
+
         return tmpl
 
     @staticmethod
@@ -1002,6 +1157,51 @@ class LetterGenerationService:
     @staticmethod
     def calculate_salary_breakdown(monthly_salary: float) -> Dict[str, Any]:
         """Generate structured salary components for Annexure II."""
+        if monthly_salary is None or monthly_salary <= 0:
+            return {
+                "monthly_ctc": "",
+                "yearly_ctc": "",
+                "total_ctc_monthly": "",
+                "basic_monthly": "",
+                "basic_yearly": "",
+                "hra_monthly": "0",
+                "hra_yearly": "0",
+                "conveyance_monthly": "0",
+                "conveyance_yearly": "0",
+                "other_allowance_monthly": "",
+                "other_allowance_yearly": "",
+                "medical_monthly": "",
+                "medical_yearly": "",
+                "bonus_monthly": "",
+                "bonus_yearly": "",
+                "gratuity_monthly": "",
+                "gratuity_yearly": "",
+                "gross_monthly": "",
+                "gross_yearly": "",
+                "emp_pf_monthly": "0",
+                "emp_pf_yearly": "0",
+                "emp_esic_monthly": "0",
+                "emp_esic_yearly": "0",
+                "gpa_monthly": "",
+                "gpa_yearly": "",
+                "prof_tax_monthly": "0",
+                "prof_tax_yearly": "0",
+                "income_tax_monthly": "0",
+                "income_tax_yearly": "0",
+                "deductions_monthly": "",
+                "deductions_yearly": "",
+                "take_home_monthly": "",
+                "take_home_yearly": "",
+                "pli_monthly": "0",
+                "pli_yearly": "0",
+                "net_take_home_monthly": "",
+                "net_take_home_yearly": "",
+                "empr_pf_monthly": "0",
+                "empr_pf_yearly": "0",
+                "empr_esic_monthly": "0",
+                "empr_esic_yearly": "0",
+            }
+
         monthly_ctc = round(monthly_salary, 2)
         basic_monthly = round(monthly_ctc * 0.60, 2)
         medical_monthly = 45.00
@@ -1078,7 +1278,7 @@ class LetterGenerationService:
         if not loc_parts and app.current_state:
             loc_parts.append(app.current_state.strip())
 
-        return ", ".join(loc_parts) if loc_parts else (app.circle or app.current_state or "India")
+        return ", ".join(loc_parts) if loc_parts else (app.circle or app.current_state or "")
 
     @staticmethod
     def get_next_offer_reference_number(exclude_letter_id: Optional[uuid.UUID] = None) -> str:
@@ -1166,22 +1366,45 @@ class LetterGenerationService:
                     db.session.delete(dup)
 
             app_dir = get_generated_letters_storage_dir(str(app.id))
-            needs_loi = not loi_letter or not os.path.exists(loi_letter.docx_storage_path)
-            needs_offer = not offer_letter or not os.path.exists(offer_letter.docx_storage_path)
+            resolved_loi = resolve_storage_path(loi_letter.docx_storage_path) if (loi_letter and loi_letter.docx_storage_path) else ""
+            resolved_offer = resolve_storage_path(offer_letter.docx_storage_path) if (offer_letter and offer_letter.docx_storage_path) else ""
+
+            needs_loi = not loi_letter or not resolved_loi or not os.path.exists(resolved_loi)
+            needs_offer = not offer_letter or not resolved_offer or not os.path.exists(resolved_offer)
+
+            if loi_letter and resolved_loi and loi_letter.docx_storage_path != resolved_loi:
+                loi_letter.docx_storage_path = resolved_loi
+            if offer_letter and resolved_offer and offer_letter.docx_storage_path != resolved_offer:
+                offer_letter.docx_storage_path = resolved_offer
 
             if needs_loi or needs_offer:
                 loi_tmpl = LetterTemplateService.get_active_template(TEMPLATE_TYPE_LOI)
                 offer_tmpl = LetterTemplateService.get_active_template(TEMPLATE_TYPE_OFFER)
 
-                monthly_salary = float(app.negotiated_salary or app.asking_salary or 40000)
-                salary_breakdown = LetterGenerationService.calculate_salary_breakdown(monthly_salary)
+                sal_val = app.negotiated_salary if app.negotiated_salary is not None else (app.asking_salary if app.asking_salary is not None else app.current_salary)
+                if sal_val is not None and float(sal_val) > 0:
+                    monthly_salary_num = float(sal_val)
+                    monthly_salary_str = f"{int(monthly_salary_num)}"
+                    total_salary_str = f"{int(monthly_salary_num)}"
+                    salary_breakdown = LetterGenerationService.calculate_salary_breakdown(monthly_salary_num)
+                else:
+                    monthly_salary_str = ""
+                    total_salary_str = ""
+                    salary_breakdown = LetterGenerationService.calculate_salary_breakdown(0)
 
-                # Build candidate address
-                addr_parts = [app.current_address_line1]
-                if app.current_address_line2:
-                    addr_parts.append(app.current_address_line2)
-                addr_parts.append(f"{app.current_city}, {app.current_state} - {app.current_pincode}")
-                candidate_address = ", ".join(p for p in addr_parts if p)
+                # Build candidate address safely without producing "None, None - None"
+                addr_parts = []
+                if app.current_address_line1 and app.current_address_line1.strip():
+                    addr_parts.append(app.current_address_line1.strip())
+                if app.current_address_line2 and app.current_address_line2.strip():
+                    addr_parts.append(app.current_address_line2.strip())
+                city_parts = [p.strip() for p in (app.current_city, app.current_state) if p and p.strip()]
+                city_state = ", ".join(city_parts)
+                if app.current_pincode and app.current_pincode.strip():
+                    city_state = f"{city_state} - {app.current_pincode.strip()}" if city_state else app.current_pincode.strip()
+                if city_state:
+                    addr_parts.append(city_state)
+                candidate_address = ", ".join(addr_parts)
 
                 # Build approved deployment location (Circle, District, Block)
                 approved_location = LetterGenerationService.build_approved_location(app)
@@ -1194,23 +1417,23 @@ class LetterGenerationService:
                 default_fields = {
                     "current_date": datetime.now().strftime("%d/%m/%Y"),
                     "date": datetime.now().strftime("%d/%m/%Y"),
-                    "candidate_full_name": app.full_name,
-                    "candidate_name": app.full_name,
-                    "candidate_address": candidate_address,
-                    "candidate_mobile": app.mobile_number,
-                    "mobile_number": app.mobile_number,
-                    "candidate_email": app.email,
+                    "candidate_full_name": app.full_name or "",
+                    "candidate_name": app.full_name or "",
+                    "candidate_address": candidate_address or "",
+                    "candidate_mobile": app.mobile_number or "",
+                    "mobile_number": app.mobile_number or "",
+                    "candidate_email": app.email or "",
                     "candidate_aadhaar": app.aadhaar_number or "-",
-                    "approved_role_name": app.role_applied,
-                    "role_applied": app.role_applied,
-                    "approved_location": approved_location,
-                    "location": approved_location,
+                    "approved_role_name": app.role_applied or "",
+                    "role_applied": app.role_applied or "",
+                    "approved_location": approved_location or "",
+                    "location": approved_location or "",
                     "joining_date": getattr(app, "joining_date", None) or (loi_letter.field_values.get("joining_date") if loi_letter and loi_letter.field_values else None) or (offer_letter.field_values.get("joining_date") if offer_letter and offer_letter.field_values else None) or "",
                     "reference_number": ref_num,
-                    "monthly_salary": f"{int(monthly_salary)}",
-                    "performance_incentive": "0",
-                    "miscellaneous_allowance": "0",
-                    "total_salary": f"{int(monthly_salary)}",
+                    "monthly_salary": monthly_salary_str,
+                    "performance_incentive": "0" if monthly_salary_str else "",
+                    "miscellaneous_allowance": "0" if monthly_salary_str else "",
+                    "total_salary": total_salary_str,
                     **salary_breakdown,
                 }
 
@@ -1258,6 +1481,18 @@ class LetterGenerationService:
                         offer_letter.field_values = default_fields
                     db.session.flush()
 
+                    audit = AuditLog(
+                        action="CANDIDATE_LETTERS_GENERATED",
+                        user_id=user.id,
+                        resource="candidate_applications",
+                        resource_id=str(app.id),
+                        details={
+                            "application_number": app.application_number,
+                            "candidate_id": str(app.id),
+                        },
+                    )
+                    db.session.add(audit)
+
                 db.session.commit()
 
         return {
@@ -1284,12 +1519,44 @@ class LetterGenerationService:
         }
 
     @staticmethod
+    def ensure_candidate_docx_exists(letter: CandidateLetter) -> str:
+        """Ensure candidate DOCX file exists on disk, regenerating from master template and fields if missing."""
+        resolved_docx = resolve_storage_path(letter.docx_storage_path)
+        if not resolved_docx or not os.path.exists(resolved_docx):
+            app = letter.application or db.session.execute(
+                select(CandidateApplication).where(CandidateApplication.id == letter.application_id)
+            ).scalar_one_or_none()
+
+            app_id_str = str(letter.application_id)
+            app_dir = get_generated_letters_storage_dir(app_id_str)
+            app_num = app.application_number if app else app_id_str[:8]
+            prefix = "loi" if letter.letter_type == TEMPLATE_TYPE_LOI else "offer"
+            resolved_docx = os.path.join(app_dir, f"{prefix}_{app_num}.docx")
+
+            tmpl = letter.template or LetterTemplateService.get_active_template(letter.letter_type)
+            tmpl_path = resolve_storage_path(tmpl.storage_path)
+            LetterGenerationService._render_docx(
+                tmpl_path,
+                resolved_docx,
+                letter.field_values or {},
+                letter.letter_type,
+            )
+            letter.docx_storage_path = resolved_docx
+            db.session.commit()
+        elif letter.docx_storage_path != resolved_docx:
+            letter.docx_storage_path = resolved_docx
+            db.session.commit()
+
+        return resolved_docx
+
+    @staticmethod
     def _serialize_letter(letter: CandidateLetter) -> Dict[str, Any]:
         page_count = 2 if letter.letter_type == TEMPLATE_TYPE_LOI else 5
-        if letter.pdf_storage_path and os.path.exists(letter.pdf_storage_path):
+        pdf_path = resolve_storage_path(letter.pdf_storage_path) if letter.pdf_storage_path else ""
+        if pdf_path and os.path.exists(pdf_path):
             try:
                 import pypdf
-                reader = pypdf.PdfReader(letter.pdf_storage_path)
+                reader = pypdf.PdfReader(pdf_path)
                 page_count = len(reader.pages)
             except Exception:
                 pass
@@ -1317,17 +1584,28 @@ class LetterGenerationService:
     @staticmethod
     def _render_docx(template_path: str, output_path: str, field_values: Dict[str, Any], letter_type: Optional[str] = None) -> None:
         """Render Word document by copying master template and populating fields while strictly preserving all run styling."""
-        if not os.path.exists(template_path):
-            raise NotFoundError(f"Master template file '{template_path}' not found.")
+        resolved_template = resolve_storage_path(template_path)
+        resolved_output = resolve_storage_path(output_path)
 
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        is_loi = (letter_type == TEMPLATE_TYPE_LOI) or ("loi" in os.path.basename(resolved_output).lower())
+        is_offer = (letter_type == TEMPLATE_TYPE_OFFER) or ("offer" in os.path.basename(resolved_output).lower())
+
+        if not os.path.exists(resolved_template):
+            storage_dir = get_templates_storage_dir()
+            fallback_filename = "letter_of_intent_v1.docx" if is_loi else "offer_letter_v1.docx"
+            fallback_path = os.path.join(storage_dir, fallback_filename)
+            if os.path.exists(fallback_path):
+                resolved_template = fallback_path
+            else:
+                LetterTemplateService.ensure_default_templates()
+                resolved_template = fallback_path
+
+        os.makedirs(os.path.dirname(os.path.abspath(resolved_output)), exist_ok=True)
 
         # Copy pristine master template to working copy path
-        shutil.copy2(template_path, output_path)
+        shutil.copy2(resolved_template, resolved_output)
 
-        doc = docx.Document(output_path)
-        is_loi = (letter_type == TEMPLATE_TYPE_LOI) or ("loi" in os.path.basename(output_path).lower())
-        is_offer = (letter_type == TEMPLATE_TYPE_OFFER) or ("offer" in os.path.basename(output_path).lower())
+        doc = docx.Document(resolved_output)
 
         cand_name = str(field_values.get("candidate_full_name", "")).strip()
         cand_mobile = str(field_values.get("candidate_mobile", "")).strip()
@@ -1339,7 +1617,7 @@ class LetterGenerationService:
         joining_date = str(field_values.get("joining_date", "")).strip()
         cur_date = str(field_values.get("current_date", "")).strip()
         ref_num = str(field_values.get("reference_number", "")).strip()
-        monthly_sal = str(field_values.get("monthly_salary", "40000")).strip()
+        monthly_sal = str(field_values.get("monthly_salary", "")).strip()
 
         # 1. Substitute any explicit {{placeholder}} variables across all document paragraphs
         for p in doc.paragraphs:
@@ -1369,24 +1647,53 @@ class LetterGenerationService:
                     replace_in_runs(p, "Mr./Ms. Mangeet Singh", f"Mr./Ms. {cand_name}")
                     replace_in_runs(p, "Mangeet Singh", cand_name)
                     replace_in_runs(p, "Dear Mr. Mangeet Singh,", f"Dear {cand_name},")
+                else:
+                    replace_in_runs(p, "Mr./Ms. Mangeet Singh", "Mr./Ms. ")
+                    replace_in_runs(p, "Mangeet Singh", "")
+                    replace_in_runs(p, "Dear Mr. Mangeet Singh,", "Dear Candidate,")
+
                 if cand_addr:
                     replace_in_runs(p, "Address: Bhatinda - Punjab", f"Address: {cand_addr}")
                     replace_in_runs(p, "Bhatinda - Punjab", cand_addr)
+                else:
+                    replace_in_runs(p, "Address: Bhatinda - Punjab", "Address: ")
+                    replace_in_runs(p, "Bhatinda - Punjab", "")
+
                 if cand_mobile:
                     replace_in_runs(p, "Mobile: 7737383505", f"Mobile: {cand_mobile}")
                     replace_in_runs(p, "7737383505", cand_mobile)
+                else:
+                    replace_in_runs(p, "Mobile: 7737383505", "Mobile: ")
+                    replace_in_runs(p, "7737383505", "")
+
                 if cand_email:
                     replace_in_runs(p, "Email ID: -", f"Email ID: {cand_email}")
+                else:
+                    replace_in_runs(p, "Email ID: -", "Email ID: ")
+
                 if cand_aadhaar and cand_aadhaar != "-":
                     replace_in_runs(p, "Aadhar Number: -", f"Aadhar Number: {cand_aadhaar}")
+                else:
+                    replace_in_runs(p, "Aadhar Number: -", "Aadhar Number: ")
+
                 if approved_role:
                     replace_in_runs(p, "HDD Operator", approved_role)
+                else:
+                    replace_in_runs(p, "HDD Operator", "")
+
                 if approved_loc:
                     replace_in_runs(p, "District Sri Ganganagar State Rajasthan.", f"{approved_loc}.")
                     replace_in_runs(p, "District Sri Ganganagar State Rajasthan", approved_loc)
+                else:
+                    replace_in_runs(p, "District Sri Ganganagar State Rajasthan.", "")
+                    replace_in_runs(p, "District Sri Ganganagar State Rajasthan", "")
+
                 if joining_date:
                     replace_in_runs(p, "Start Date of Services: 01/11/2026", f"Start Date of Services: {joining_date}")
                     replace_in_runs(p, "01/11/2026", joining_date)
+                else:
+                    replace_in_runs(p, "Start Date of Services: 01/11/2026", "Start Date of Services: ")
+                    replace_in_runs(p, "01/11/2026", "")
 
             # LOI Table (Salary & Total)
             for t in doc.tables:
@@ -1408,17 +1715,38 @@ class LetterGenerationService:
                     replace_in_runs(p, "Mr. Setu Jat", cand_name)
                     replace_in_runs(p, "Setu Jat", cand_name)
                     replace_in_runs(p, "Dear Mr. Setu Jat,", f"Dear {cand_name},")
+                else:
+                    replace_in_runs(p, "Name: Mr. Setu Jat", "Name: ")
+                    replace_in_runs(p, "Name:  Mr. Setu Jat", "Name: ")
+                    replace_in_runs(p, "Mr. Setu Jat", "")
+                    replace_in_runs(p, "Setu Jat", "")
+                    replace_in_runs(p, "Dear Mr. Setu Jat,", "Dear Candidate,")
+
                 if cand_mobile:
                     replace_in_runs(p, "Mobile -+91 9571024426", f"Mobile: {cand_mobile}")
                     replace_in_runs(p, "9571024426", cand_mobile)
+                else:
+                    replace_in_runs(p, "Mobile -+91 9571024426", "Mobile: ")
+                    replace_in_runs(p, "9571024426", "")
+
                 if approved_role:
                     replace_in_runs(p, "HDD - Tracker", approved_role)
+                else:
+                    replace_in_runs(p, "HDD - Tracker", "")
+
                 if approved_loc:
                     replace_in_runs(p, "Presently you will be posted in Behrunda 2 Rajasthan", f"Presently you will be posted in {approved_loc}")
                     replace_in_runs(p, "Behrunda 2 Rajasthan", approved_loc)
+                else:
+                    replace_in_runs(p, "Presently you will be posted in Behrunda 2 Rajasthan", "Presently you will be posted in -")
+                    replace_in_runs(p, "Behrunda 2 Rajasthan", "")
+
                 if joining_date:
                     replace_in_runs(p, "Dated: 01/10/2026.", f"Dated: {joining_date}.")
                     replace_in_runs(p, "01/10/2026", joining_date)
+                else:
+                    replace_in_runs(p, "Dated: 01/10/2026.", "Dated: ")
+                    replace_in_runs(p, "01/10/2026", "")
 
             # Offer Letter Table 0 (Annexure II)
             if doc.tables:
@@ -1430,15 +1758,21 @@ class LetterGenerationService:
                 # Update structured Annexure II compensation rows while preserving cell formatting
                 if len(t.rows) >= 28:
                     try:
-                        ms_num = float(monthly_sal)
-                        sb = LetterGenerationService.calculate_salary_breakdown(ms_num)
+                        ms_num = float(monthly_sal) if monthly_sal else 0.0
+                        if ms_num > 0:
+                            sb = LetterGenerationService.calculate_salary_breakdown(ms_num)
+                            default_yearly = str(int(ms_num * 12))
+                        else:
+                            sb = {}
+                            default_yearly = ""
                     except (ValueError, TypeError):
                         sb = {}
+                        default_yearly = ""
 
                     update_cell_value_preserving_style(t.rows[3].cells[1], str(field_values.get("total_ctc_monthly", sb.get("total_ctc_monthly", monthly_sal))))
-                    update_cell_value_preserving_style(t.rows[3].cells[2], str(field_values.get("yearly_ctc", sb.get("yearly_ctc", int(float(monthly_sal) * 12)))))
+                    update_cell_value_preserving_style(t.rows[3].cells[2], str(field_values.get("yearly_ctc", sb.get("yearly_ctc", default_yearly))))
                     update_cell_value_preserving_style(t.rows[4].cells[1], str(field_values.get("total_ctc_monthly", sb.get("total_ctc_monthly", monthly_sal))))
-                    update_cell_value_preserving_style(t.rows[4].cells[2], str(field_values.get("yearly_ctc", sb.get("yearly_ctc", int(float(monthly_sal) * 12)))))
+                    update_cell_value_preserving_style(t.rows[4].cells[2], str(field_values.get("yearly_ctc", sb.get("yearly_ctc", default_yearly))))
 
                     for r_idx in range(8, min(len(t.rows), 28)):
                         row = t.rows[r_idx]
@@ -1450,8 +1784,8 @@ class LetterGenerationService:
                             update_cell_value_preserving_style(row.cells[1], str(field_values.get("other_allowance_monthly", sb.get("other_allowance_monthly", row.cells[1].text))))
                             update_cell_value_preserving_style(row.cells[2], str(field_values.get("other_allowance_yearly", sb.get("other_allowance_yearly", row.cells[2].text))))
                         elif "medical allowance" in head_name:
-                            update_cell_value_preserving_style(row.cells[1], str(field_values.get("medical_monthly", sb.get("medical_monthly", "45"))))
-                            update_cell_value_preserving_style(row.cells[2], str(field_values.get("medical_yearly", sb.get("medical_yearly", "540"))))
+                            update_cell_value_preserving_style(row.cells[1], str(field_values.get("medical_monthly", sb.get("medical_monthly", row.cells[1].text))))
+                            update_cell_value_preserving_style(row.cells[2], str(field_values.get("medical_yearly", sb.get("medical_yearly", row.cells[2].text))))
                         elif "advance bonus" in head_name:
                             update_cell_value_preserving_style(row.cells[1], str(field_values.get("bonus_monthly", sb.get("bonus_monthly", row.cells[1].text))))
                             update_cell_value_preserving_style(row.cells[2], str(field_values.get("bonus_yearly", sb.get("bonus_yearly", row.cells[2].text))))
@@ -1488,10 +1822,11 @@ class LetterGenerationService:
     @staticmethod
     def extract_letter_content(letter: CandidateLetter) -> Dict[str, Any]:
         """Extract structured paragraphs, table cells, and fields from candidate DOCX."""
-        if not letter.docx_storage_path or not os.path.exists(letter.docx_storage_path):
+        docx_path = LetterGenerationService.ensure_candidate_docx_exists(letter)
+        if not docx_path or not os.path.exists(docx_path):
             return {"paragraphs": {}, "tables": [], "field_values": letter.field_values or {}}
         try:
-            doc = docx.Document(letter.docx_storage_path)
+            doc = docx.Document(docx_path)
             paragraphs = {str(i): p.text for i, p in enumerate(doc.paragraphs) if p.text.strip()}
             tables = [
                 [[cell.text.strip() for cell in row.cells] for row in table.rows]
@@ -1529,16 +1864,13 @@ class LetterGenerationService:
             raise NotFoundError(f"Candidate letter for '{letter_type}' not found.")
 
         with atomic():
+            docx_path = LetterGenerationService.ensure_candidate_docx_exists(letter)
             if uploaded_docx and uploaded_docx.filename:
                 # Save revised docx directly
-                uploaded_docx.save(letter.docx_storage_path)
+                uploaded_docx.save(docx_path)
+                letter.docx_storage_path = docx_path
             else:
-                # Open candidate-specific working copy (never overwrite with master)
-                if not os.path.exists(letter.docx_storage_path):
-                    tmpl = letter.template or LetterTemplateService.get_active_template(letter_type)
-                    LetterGenerationService._render_docx(tmpl.storage_path, letter.docx_storage_path, letter.field_values or {}, letter_type)
-
-                doc = docx.Document(letter.docx_storage_path)
+                doc = docx.Document(docx_path)
                 old_fields = dict(letter.field_values or {})
                 merged_fields = dict(old_fields)
                 if field_values:
@@ -1674,7 +2006,8 @@ class LetterGenerationService:
                                     for cell in row.cells:
                                         replace_in_cell(cell, old_t, new_t)
 
-                doc.save(letter.docx_storage_path)
+                doc.save(docx_path)
+                letter.docx_storage_path = docx_path
                 letter.field_values = merged_fields
 
                 # Synchronize joining_date to parent CandidateApplication and peer CandidateLetter
@@ -1695,14 +2028,15 @@ class LetterGenerationService:
                         ).scalars().first()
 
                         if peer_letter and peer_letter.id != letter.id:
+                            peer_docx_path = LetterGenerationService.ensure_candidate_docx_exists(peer_letter)
                             peer_fields = dict(peer_letter.field_values or {})
                             old_peer_jd = peer_fields.get("joining_date", "")
                             if old_peer_jd != new_jd:
                                 peer_fields["joining_date"] = new_jd
                                 peer_letter.field_values = peer_fields
-                                if os.path.exists(peer_letter.docx_storage_path):
+                                if os.path.exists(peer_docx_path):
                                     try:
-                                        peer_doc = docx.Document(peer_letter.docx_storage_path)
+                                        peer_doc = docx.Document(peer_docx_path)
                                         for p in peer_doc.paragraphs:
                                             replace_in_runs(p, "{{joining_date}}", new_jd)
                                             replace_in_runs(p, "{{ joining_date }}", new_jd)
@@ -1725,12 +2059,14 @@ class LetterGenerationService:
                                                     replace_in_cell(cell, "{{ joining_date }}", new_jd)
                                                     if old_peer_jd:
                                                         replace_in_cell(cell, old_peer_jd, new_jd)
-                                        peer_doc.save(peer_letter.docx_storage_path)
+                                        peer_doc.save(peer_docx_path)
+                                        peer_letter.docx_storage_path = peer_docx_path
                                     except Exception:
                                         pass
-                                if peer_letter.pdf_storage_path and os.path.exists(peer_letter.pdf_storage_path):
+                                peer_pdf = resolve_storage_path(peer_letter.pdf_storage_path) if peer_letter.pdf_storage_path else ""
+                                if peer_pdf and os.path.exists(peer_pdf):
                                     try:
-                                        os.remove(peer_letter.pdf_storage_path)
+                                        os.remove(peer_pdf)
                                     except Exception:
                                         pass
                                 peer_letter.pdf_storage_path = None
@@ -1738,9 +2074,10 @@ class LetterGenerationService:
                                 peer_letter.last_edited_at = utc_now()
 
             # Invalidate cached pdf to trigger re-generation on demand
-            if letter.pdf_storage_path and os.path.exists(letter.pdf_storage_path):
+            letter_pdf = resolve_storage_path(letter.pdf_storage_path) if letter.pdf_storage_path else ""
+            if letter_pdf and os.path.exists(letter_pdf):
                 try:
-                    os.remove(letter.pdf_storage_path)
+                    os.remove(letter_pdf)
                 except Exception:
                     pass
             letter.pdf_storage_path = None
@@ -1760,20 +2097,24 @@ class LetterGenerationService:
     @staticmethod
     def get_or_render_pdf(letter: CandidateLetter) -> str:
         """Ensure a high-fidelity PDF version of the candidate letter exists and return its path."""
-        if letter.pdf_storage_path and os.path.exists(letter.pdf_storage_path):
+        docx_path = LetterGenerationService.ensure_candidate_docx_exists(letter)
+
+        resolved_pdf = resolve_storage_path(letter.pdf_storage_path) if letter.pdf_storage_path else ""
+        if resolved_pdf and os.path.exists(resolved_pdf):
             try:
-                if os.path.getmtime(letter.pdf_storage_path) >= os.path.getmtime(letter.docx_storage_path):
-                    return letter.pdf_storage_path
+                if os.path.getmtime(resolved_pdf) >= os.path.getmtime(docx_path):
+                    letter.pdf_storage_path = resolved_pdf
+                    return resolved_pdf
             except Exception:
                 pass
 
-        pdf_path = letter.docx_storage_path.replace(".docx", ".pdf")
+        pdf_path = docx_path.replace(".docx", ".pdf")
 
         # In testing mode, use ReportLab to avoid COM processes in headless runners
         if current_app.config.get("TESTING") and REPORTLAB_AVAILABLE:
             try:
                 c = canvas.Canvas(pdf_path, pagesize=LETTER_PAGESIZE)
-                doc = docx.Document(letter.docx_storage_path)
+                doc = docx.Document(docx_path)
                 y = 750
                 c.setFont("Helvetica-Bold", 14)
                 c.drawString(50, y, f"{'Letter of Intent' if letter.letter_type == TEMPLATE_TYPE_LOI else 'Appointment / Offer Letter'}")
@@ -1810,14 +2151,14 @@ class LetterGenerationService:
             except Exception as e:
                 current_app.logger.error(f"Test PDF rendering error: {e}")
 
-        # Native conversion (Word COM or docx2pdf or ReportLab fallback)
-        converted = convert_docx_to_pdf_native(letter.docx_storage_path, pdf_path)
+        # Native conversion (Windows Word COM, LibreOffice headless, docx2pdf, or ReportLab fallback)
+        converted = convert_docx_to_pdf_native(docx_path, pdf_path)
         if converted and os.path.exists(pdf_path):
             letter.pdf_storage_path = pdf_path
             db.session.commit()
             return pdf_path
 
-        raise ValidationError("Failed to convert reviewed candidate letter to PDF. Please verify Microsoft Word or document converter.")
+        raise ValidationError("Failed to convert reviewed candidate letter to PDF. Please verify LibreOffice, Microsoft Word, or document converter.")
 
     @staticmethod
     def send_letters_by_email(
@@ -1842,7 +2183,8 @@ class LetterGenerationService:
 
         if not app.email or "@" not in app.email:
             raise ValidationError(
-                f"Candidate application '{app.application_number}' does not have a valid registered email address."
+                f"Cannot send letters via email because candidate '{app.application_number}' has no valid registered email address. "
+                "Email dispatch is blocked until an email address is provided. The approved candidate status and generated letters remain preserved."
             )
 
         include_loi = document_scope in ("both", TEMPLATE_TYPE_LOI, "loi")
@@ -1911,9 +2253,10 @@ class LetterGenerationService:
 
         # Prepare attachments: generate and strictly validate candidate-specific PDFs
         attachments = []
-        safe_cand_name = app.full_name.replace(" ", "_")
+        safe_cand_name = (app.full_name or "Candidate").replace(" ", "_")
 
         if include_loi and loi_letter:
+            LetterGenerationService.ensure_candidate_docx_exists(loi_letter)
             loi_file = LetterGenerationService.get_or_render_pdf(loi_letter)
             if not loi_file or not loi_file.endswith(".pdf") or not os.path.exists(loi_file):
                 raise ValidationError("Could not generate final PDF for Letter of Intent. Email dispatch aborted.")
@@ -1923,6 +2266,7 @@ class LetterGenerationService:
             })
 
         if include_offer and offer_letter:
+            LetterGenerationService.ensure_candidate_docx_exists(offer_letter)
             offer_file = LetterGenerationService.get_or_render_pdf(offer_letter)
             if not offer_file or not offer_file.endswith(".pdf") or not os.path.exists(offer_file):
                 raise ValidationError("Could not generate final PDF for Offer Letter. Email dispatch aborted.")
@@ -2037,7 +2381,7 @@ class LetterGenerationService:
         include_offer = document_scope in ("both", TEMPLATE_TYPE_OFFER, "offer")
 
         attachments = []
-        safe_cand_name = app.full_name.replace(" ", "_")
+        safe_cand_name = (app.full_name or "Candidate").replace(" ", "_")
 
         if include_loi:
             attachments.append({
@@ -2049,9 +2393,9 @@ class LetterGenerationService:
             })
 
         subject, html_body, text_body = EmailService.render_congratulations_email(
-            candidate_name=app.full_name,
+            candidate_name=app.full_name or "Candidate",
             application_number=app.application_number,
-            registered_email=app.email,
+            registered_email=app.email or "",
             role_applied=app.role_applied or "Candidate",
             attachments=attachments,
         )

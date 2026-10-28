@@ -183,13 +183,13 @@ export const InteractiveOfferLetter: React.FC<InteractiveOfferLetterProps> = ({
   offerFields,
   onFieldChange,
 }) => {
-  const candName = offerFields.candidate_full_name || 'Setu Jat';
-  const candMobile = offerFields.candidate_mobile || '9571024426';
-  const approvedRole = offerFields.approved_role_name || 'HDD - Tracker';
-  const approvedLoc = offerFields.approved_location || 'Rajasthan, Ajmer';
-  const joiningDate = offerFields.joining_date || '01/10/2026';
-  const refNum = offerFields.reference_number || 'FFPL/RAJ/2026-26/10/000100';
-  const curDate = offerFields.current_date || '20th Oct, 2026';
+  const candName = offerFields.candidate_full_name !== undefined ? offerFields.candidate_full_name : '';
+  const candMobile = offerFields.candidate_mobile !== undefined ? offerFields.candidate_mobile : '';
+  const approvedRole = offerFields.approved_role_name || offerFields.role_applied || '';
+  const approvedLoc = offerFields.approved_location || offerFields.location || '';
+  const joiningDate = offerFields.joining_date || '';
+  const refNum = offerFields.reference_number || '';
+  const curDate = offerFields.current_date || new Date().toLocaleDateString('en-GB');
 
   const defaultFooter =
     'Registered Office: - 445, Sanjay Nagar D, Kalwar Road, Jhotwara, Jhotwara, Jaipur, Jaipur- 302012, Rajasthan';

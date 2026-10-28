@@ -255,7 +255,7 @@ def test_sensitive_data_masking_and_authorized_unmasking(client, app):
     assert detail["account_number"] == "12345678901234"
 
 
-def test_approve_workflow_blocks_incomplete_and_allows_when_complete(client, app):
+def test_approve_workflow_allows_incomplete_and_persists(client, app):
     with app.app_context():
         candidate = create_user_with_role("cand_appr@example.com", "Pass@1234", "candidate")
         reviewer = create_user_with_role("hr_appr@example.com", "Pass@1234", "reviewer")
@@ -272,40 +272,8 @@ def test_approve_workflow_blocks_incomplete_and_allows_when_complete(client, app
     cand_appr = client.post(f"/api/v1/applications/{app_id}/approve")
     assert cand_appr.status_code == 403
 
-    # Reviewer attempts to approve while items are pending -> 400 Validation Error
+    # Reviewer approves candidate even while items are still pending/incomplete -> 200 OK
     login_client(client, "hr_appr@example.com", "Pass@1234")
-    premature_appr = client.post(f"/api/v1/applications/{app_id}/approve")
-    assert premature_appr.status_code == 400
-    assert "cannot be approved until all required checks are completed" in premature_appr.json["message"]
-
-    # Bulk verify eligible uploaded documents (marks 3 uploaded docs)
-    bulk_resp = client.post(f"/api/v1/applications/{app_id}/verification/bulk-done")
-    assert bulk_resp.status_code == 200
-    assert bulk_resp.json["data"]["marked_done_count"] == 3
-    # Status is IN_PROGRESS because detail checks are still pending
-    assert bulk_resp.json["data"]["application_status"] == APPLICATION_STATUS_IN_PROGRESS
-
-    # Approval is still blocked because personal, address, salary details are pending
-    blocked_appr = client.post(f"/api/v1/applications/{app_id}/approve")
-    assert blocked_appr.status_code == 400
-    assert "cannot be approved until all required checks are completed" in blocked_appr.json["message"]
-
-    # Verify all remaining mandatory detail items individually
-    detail_keys = [
-        "personal_info",
-        "contact_info",
-        "current_address",
-        "permanent_address",
-        "location_allocation",
-        "bank_details",
-        "current_salary",
-        "asking_salary",
-        "negotiated_salary",
-    ]
-    for k in detail_keys:
-        client.post(f"/api/v1/applications/{app_id}/verification/{k}/done")
-
-    # Now all mandatory items are done, approve candidate -> 200 OK
     appr_resp = client.post(f"/api/v1/applications/{app_id}/approve")
     assert appr_resp.status_code == 200
     appr_data = appr_resp.json["data"]
@@ -313,11 +281,19 @@ def test_approve_workflow_blocks_incomplete_and_allows_when_complete(client, app
     assert appr_data["reviewed_by_name"] == "User Reviewer"
     assert appr_data["reviewed_at"] is not None
 
-    # Fetch application details to verify persistence
+    # Fetch application details to verify persistence after relogin/refresh
     get_resp = client.get(f"/api/v1/applications/{app_id}")
     assert get_resp.status_code == 200
     assert get_resp.json["data"]["status"] == "APPROVED"
     assert get_resp.json["data"]["reviewed_by_name"] == "User Reviewer"
+
+    # Status must NOT demote back to IN_PROGRESS when items are later updated
+    bulk_resp = client.post(f"/api/v1/applications/{app_id}/verification/bulk-done")
+    assert bulk_resp.status_code == 200
+    assert bulk_resp.json["data"]["application_status"] == "APPROVED"
+
+    get_resp2 = client.get(f"/api/v1/applications/{app_id}")
+    assert get_resp2.json["data"]["status"] == "APPROVED"
 
 
 def test_reject_workflow_requires_reason_and_persists(client, app):
@@ -400,8 +376,8 @@ def test_bulk_verification_workflow(client, app):
         ).first()
         assert current_addr.status == VERIFICATION_STATUS_PENDING
 
-    # Attempting candidate approval fails because detail checks are still pending
-    premature_appr = client.post(f"/api/v1/applications/{app_id}/approve")
-    assert premature_appr.status_code == 400
-    assert "cannot be approved until all required checks are completed" in premature_appr.json["message"]
+    # Candidate approval is permitted and succeeds even when detail checks are still pending
+    appr_resp = client.post(f"/api/v1/applications/{app_id}/approve")
+    assert appr_resp.status_code == 200
+    assert appr_resp.json["data"]["status"] == "APPROVED"
 

@@ -27,6 +27,17 @@ export const candidateService = {
     return response.data.data;
   },
 
+  updateApplication: async (
+    id: string,
+    data: Partial<CandidateApplicationFormOutput>
+  ): Promise<CandidateApplicationResponse> => {
+    const response = await apiClient.put<ApiResponse<CandidateApplicationResponse>>(
+      `/applications/${id}`,
+      data
+    );
+    return response.data.data;
+  },
+
   getMyApplications: async (): Promise<ApplicationsListResponse> => {
     const response = await apiClient.get<
       ApiResponse<CandidateApplicationResponse[] | ApplicationsListResponse>

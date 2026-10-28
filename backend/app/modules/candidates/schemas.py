@@ -109,16 +109,21 @@ class CreateCandidateApplicationSchema(Schema):
     """Validation schema for candidate application submissions."""
 
     hero_category = fields.String(
-        required=True,
-        validate=validate.OneOf(HERO_CATEGORIES, error="Invalid Hero category selected."),
+        required=False,
+        allow_none=True,
+        load_default="Hero 1",
+        validate=validate.OneOf(HERO_CATEGORIES + [""], error="Invalid Hero category selected."),
     )
     role_applied = fields.String(
-        required=True,
-        validate=validate.Length(min=2, max=100),
+        required=False,
+        allow_none=True,
+        load_default="",
     )
 
     @validates("role_applied")
-    def validate_role_applied(self, value: str):
+    def validate_role_applied(self, value: Optional[str]):
+        if not value or not value.strip():
+            return
         from app.modules.candidates.models import ApplicationRole, ROLES_APPLIED
         from app.extensions import db
         from sqlalchemy import select
@@ -136,55 +141,57 @@ class CreateCandidateApplicationSchema(Schema):
                 raise ValidationError(f"Invalid role choice '{value}' selected.")
 
     # Personal Information
-    full_name = fields.String(required=True, validate=validate.Length(min=2, max=150))
-    mobile_number = fields.String(required=True)
-    email = fields.Email(required=True, validate=validate.Length(max=255))
-    aadhaar_number = fields.String(required=True)
-    pan_number = fields.String(required=True)
+    full_name = fields.String(required=False, allow_none=True, validate=validate.Length(max=150))
+    mobile_number = fields.String(required=False, allow_none=True)
+    email = fields.Email(required=False, allow_none=True, validate=validate.Length(max=255))
+    aadhaar_number = fields.String(required=False, allow_none=True)
+    pan_number = fields.String(required=False, allow_none=True)
 
     # Current Address
-    current_address_line1 = fields.String(required=True, validate=validate.Length(min=3, max=255))
+    current_address_line1 = fields.String(required=False, allow_none=True, validate=validate.Length(max=255))
     current_address_line2 = fields.String(required=False, allow_none=True, validate=validate.Length(max=255))
-    current_city = fields.String(required=True, validate=validate.Length(min=2, max=100))
-    current_state = fields.String(required=True, validate=validate.Length(min=2, max=100))
-    current_pincode = fields.String(required=False, validate=validate.Length(min=4, max=10))
-    current_pin_code = fields.String(required=False, load_only=True)
-    current_country = fields.String(required=False, load_default="India", validate=validate.Length(max=100))
+    current_city = fields.String(required=False, allow_none=True, validate=validate.Length(max=100))
+    current_state = fields.String(required=False, allow_none=True, validate=validate.Length(max=100))
+    current_pincode = fields.String(required=False, allow_none=True, validate=validate.Length(max=20))
+    current_pin_code = fields.String(required=False, allow_none=True, load_only=True)
+    current_country = fields.String(required=False, allow_none=True, load_default="India", validate=validate.Length(max=100))
 
     # Permanent Address
     is_permanent_same = fields.Boolean(required=False, load_default=False)
-    permanent_address_line1 = fields.String(required=False, validate=validate.Length(min=3, max=255))
+    permanent_address_line1 = fields.String(required=False, allow_none=True, validate=validate.Length(max=255))
     permanent_address_line2 = fields.String(required=False, allow_none=True, validate=validate.Length(max=255))
-    permanent_city = fields.String(required=False, validate=validate.Length(min=2, max=100))
-    permanent_state = fields.String(required=False, validate=validate.Length(min=2, max=100))
-    permanent_pincode = fields.String(required=False, validate=validate.Length(min=4, max=10))
-    permanent_pin_code = fields.String(required=False, load_only=True)
-    permanent_country = fields.String(required=False, load_default="India", validate=validate.Length(max=100))
+    permanent_city = fields.String(required=False, allow_none=True, validate=validate.Length(max=100))
+    permanent_state = fields.String(required=False, allow_none=True, validate=validate.Length(max=100))
+    permanent_pincode = fields.String(required=False, allow_none=True, validate=validate.Length(max=20))
+    permanent_pin_code = fields.String(required=False, allow_none=True, load_only=True)
+    permanent_country = fields.String(required=False, allow_none=True, load_default="India", validate=validate.Length(max=100))
 
     # Bank Details
-    account_holder_name = fields.String(required=True, validate=validate.Length(min=2, max=150))
-    bank_name = fields.String(required=True, validate=validate.Length(min=2, max=150))
-    account_number = fields.String(required=True, validate=validate.Length(min=6, max=30))
-    confirm_account_number = fields.String(required=True, load_only=True)
-    ifsc_code = fields.String(required=True)
+    account_holder_name = fields.String(required=False, allow_none=True, validate=validate.Length(max=150))
+    bank_name = fields.String(required=False, allow_none=True, validate=validate.Length(max=150))
+    account_number = fields.String(required=False, allow_none=True, validate=validate.Length(max=50))
+    confirm_account_number = fields.String(required=False, allow_none=True, load_only=True)
+    ifsc_code = fields.String(required=False, allow_none=True)
     branch_name = fields.String(required=False, allow_none=True, validate=validate.Length(max=150))
 
     # Step 4: Location Details
-    circle = fields.String(required=True, validate=validate.Length(min=2, max=100))
-    district = fields.String(required=False, validate=validate.Length(max=500))
-    block = fields.String(required=False, validate=validate.Length(max=1000))
-    district_ids = fields.List(fields.UUID(), required=False)
-    block_ids = fields.List(fields.UUID(), required=False)
+    circle = fields.String(required=False, allow_none=True, validate=validate.Length(max=100))
+    district = fields.String(required=False, allow_none=True, validate=validate.Length(max=500))
+    block = fields.String(required=False, allow_none=True, validate=validate.Length(max=1000))
+    district_ids = fields.List(fields.UUID(), required=False, allow_none=True)
+    block_ids = fields.List(fields.UUID(), required=False, allow_none=True)
 
     # Step 4: Salary Details
     current_salary = fields.Decimal(
         as_string=True,
-        required=True,
+        required=False,
+        allow_none=True,
         validate=validate.Range(min=0, error="Current salary cannot be negative."),
     )
     asking_salary = fields.Decimal(
         as_string=True,
-        required=True,
+        required=False,
+        allow_none=True,
         validate=validate.Range(min=0, error="Asking salary cannot be negative."),
     )
     negotiated_salary = fields.Decimal(
@@ -224,39 +231,52 @@ class CreateCandidateApplicationSchema(Schema):
                 if not payload.get(perm_key) and payload.get(curr_key):
                     payload[perm_key] = payload[curr_key]
 
-        # Convert empty string negotiated_salary to None
-        if payload.get("negotiated_salary") == "" or payload.get("negotiated_salary") is None:
-            payload["negotiated_salary"] = None
+        # Convert empty strings to None for fields marshmallow would otherwise reject
+        for f in ["email", "current_salary", "asking_salary", "negotiated_salary"]:
+            if payload.get(f) == "":
+                payload[f] = None
 
         return payload
 
     @validates("mobile_number")
-    def validate_phone(self, value: str) -> None:
+    def validate_phone(self, value: Optional[str]) -> None:
+        if not value or not str(value).strip():
+            return
         clean = value.replace(" ", "").replace("-", "")
         if not PHONE_REGEX.match(clean):
             raise ValidationError("Please provide a valid 10-digit mobile number.")
 
     @validates("aadhaar_number")
-    def validate_aadhaar(self, value: str) -> None:
+    def validate_aadhaar(self, value: Optional[str]) -> None:
+        if not value or not str(value).strip():
+            return
         clean = value.replace(" ", "").replace("-", "")
         if not AADHAAR_REGEX.match(clean):
             raise ValidationError("Aadhaar number must be exactly 12 numeric digits.")
 
     @validates("pan_number")
-    def validate_pan(self, value: str) -> None:
+    def validate_pan(self, value: Optional[str]) -> None:
+        if not value or not str(value).strip():
+            return
         clean = value.replace(" ", "").strip().upper()
         if not PAN_REGEX.match(clean):
             raise ValidationError("PAN must follow valid standard format (e.g., ABCDE1234F).")
 
     @validates("ifsc_code")
-    def validate_ifsc(self, value: str) -> None:
+    def validate_ifsc(self, value: Optional[str]) -> None:
+        if not value or not str(value).strip():
+            return
         clean = value.replace(" ", "").strip().upper()
         if not IFSC_REGEX.match(clean):
             raise ValidationError("IFSC code must follow valid 11-character format (e.g., SBIN0001234).")
 
     @validates_schema
     def validate_bank_account_match(self, data, **kwargs):
-        if data.get("account_number") != data.get("confirm_account_number"):
+        acc = data.get("account_number")
+        confirm = data.get("confirm_account_number")
+        if not acc and not confirm:
+            return
+        if (acc or "").strip() != (confirm or "").strip():
             raise ValidationError(
                 {"confirm_account_number": ["Account number and confirmation do not match."]}
             )
@@ -265,23 +285,18 @@ class CreateCandidateApplicationSchema(Schema):
     def validate_location_allocation(self, data, **kwargs):
         district_ids = data.get("district_ids")
         block_ids = data.get("block_ids")
-        district_str = data.get("district")
-        block_str = data.get("block")
-
-        if not district_ids and not district_str:
-            raise ValidationError({"district": ["At least one district must be selected."]})
-        if not block_ids and not block_str:
-            raise ValidationError({"block": ["At least one block must be selected."]})
 
         if district_ids:
             from app.modules.locations.models import LocationDistrict, LocationBlock, LocationState
             from app.extensions import db
             from sqlalchemy import select
 
-            circle_name = data.get("circle", "").strip()
-            state = db.session.execute(
-                select(LocationState).where(db.func.lower(LocationState.name) == circle_name.lower())
-            ).scalar_one_or_none()
+            circle_name = (data.get("circle") or "").strip()
+            state = None
+            if circle_name:
+                state = db.session.execute(
+                    select(LocationState).where(db.func.lower(LocationState.name) == circle_name.lower())
+                ).scalar_one_or_none()
 
             districts = list(
                 db.session.execute(
@@ -320,14 +335,10 @@ class CreateCandidateApplicationSchema(Schema):
             data["_validated_districts"] = districts
             data["_validated_blocks"] = blocks if block_ids else []
 
-        # Ensure permanent address fields exist if not same
-        if not data.get("is_permanent_same"):
-            missing = {}
-            for req_field in ["permanent_address_line1", "permanent_city", "permanent_state", "permanent_pincode"]:
-                if not data.get(req_field):
-                    missing[req_field] = ["Missing data for required field."]
-            if missing:
-                raise ValidationError(missing)
+
+class UpdateCandidateApplicationSchema(CreateCandidateApplicationSchema):
+    """Validation schema for candidate application updates."""
+    pass
 
 
 class CandidateApplicationResponseSchema(Schema):
@@ -412,24 +423,32 @@ class CandidateApplicationResponseSchema(Schema):
             return obj.reviewed_by.full_name or obj.reviewed_by.email
         return None
 
-    def get_masked_mobile(self, obj) -> str:
+    def get_masked_mobile(self, obj) -> Optional[str]:
         raw = getattr(obj, "mobile_number", "") or ""
+        if not raw:
+            return None
         clean = re.sub(r"\D", "", raw)
         if len(clean) >= 10:
             return f"{clean[:2]}••••••{clean[-2:]}"
-        return "••••••••••"
+        return clean or None
 
-    def get_masked_aadhaar(self, obj) -> str:
+    def get_masked_aadhaar(self, obj) -> Optional[str]:
         raw = getattr(obj, "aadhaar_number", "") or ""
-        return f"••••••••{raw[-4:]}" if len(raw) >= 4 else "••••"
+        if not raw:
+            return None
+        return f"••••••••{raw[-4:]}" if len(raw) >= 4 else raw
 
-    def get_masked_pan(self, obj) -> str:
+    def get_masked_pan(self, obj) -> Optional[str]:
         raw = getattr(obj, "pan_number", "") or ""
-        return f"••••••{raw[-4:]}" if len(raw) >= 4 else "••••"
+        if not raw:
+            return None
+        return f"••••••{raw[-4:]}" if len(raw) >= 4 else raw
 
-    def get_masked_account(self, obj) -> str:
+    def get_masked_account(self, obj) -> Optional[str]:
         raw = getattr(obj, "account_number", "") or ""
-        return f"••••••••{raw[-4:]}" if len(raw) >= 4 else "••••"
+        if not raw:
+            return None
+        return f"••••••••{raw[-4:]}" if len(raw) >= 4 else raw
 
     def get_raw_aadhaar(self, obj) -> Optional[str]:
         if self.context.get("allow_unmasked"):

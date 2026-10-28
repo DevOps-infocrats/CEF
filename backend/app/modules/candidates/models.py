@@ -77,48 +77,48 @@ class CandidateApplication(db.Model):
     )
 
     # Selected Category & Role
-    hero_category: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    role_applied: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    hero_category: Mapped[Optional[str]] = mapped_column(String(20), default="Hero 1", nullable=True, index=True)
+    role_applied: Mapped[Optional[str]] = mapped_column(String(50), default="", nullable=True, index=True)
 
     # Personal Information
-    full_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    mobile_number: Mapped[str] = mapped_column(String(20), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), nullable=False)
-    aadhaar_number: Mapped[str] = mapped_column(String(20), nullable=False)
-    pan_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    full_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    mobile_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    aadhaar_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    pan_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     # Current Address
-    current_address_line1: Mapped[str] = mapped_column(String(255), nullable=False)
+    current_address_line1: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     current_address_line2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    current_city: Mapped[str] = mapped_column(String(100), nullable=False)
-    current_state: Mapped[str] = mapped_column(String(100), nullable=False)
-    current_pincode: Mapped[str] = mapped_column(String(20), nullable=False)
-    current_country: Mapped[str] = mapped_column(String(100), default="India", nullable=False)
+    current_city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    current_state: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    current_pincode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    current_country: Mapped[Optional[str]] = mapped_column(String(100), default="India", nullable=True)
 
     # Permanent Address
-    is_permanent_same: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    permanent_address_line1: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_permanent_same: Mapped[bool] = mapped_column(Boolean, default=False, nullable=True)
+    permanent_address_line1: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     permanent_address_line2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    permanent_city: Mapped[str] = mapped_column(String(100), nullable=False)
-    permanent_state: Mapped[str] = mapped_column(String(100), nullable=False)
-    permanent_pincode: Mapped[str] = mapped_column(String(20), nullable=False)
-    permanent_country: Mapped[str] = mapped_column(String(100), default="India", nullable=False)
+    permanent_city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    permanent_state: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    permanent_pincode: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    permanent_country: Mapped[Optional[str]] = mapped_column(String(100), default="India", nullable=True)
 
     # Bank Details
-    account_holder_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    bank_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    account_number: Mapped[str] = mapped_column(String(50), nullable=False)
-    ifsc_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    account_holder_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    bank_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    account_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    ifsc_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     branch_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
 
     # Step 4: Location Details
-    circle: Mapped[str] = mapped_column(String(100), nullable=False)
-    district: Mapped[str] = mapped_column(String(500), nullable=False)
-    block: Mapped[str] = mapped_column(String(1000), nullable=False)
+    circle: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    district: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    block: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
 
     # Step 4: Salary Details
-    current_salary: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    asking_salary: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    current_salary: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    asking_salary: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     negotiated_salary: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
 
     # Joining Date
@@ -208,36 +208,36 @@ class CandidateApplication(db.Model):
         self,
         application_number: str,
         user_id: uuid.UUID,
-        hero_category: str,
-        role_applied: str,
-        full_name: str,
-        mobile_number: str,
-        email: str,
-        aadhaar_number: str,
-        pan_number: str,
-        current_address_line1: str,
-        current_city: str,
-        current_state: str,
-        current_pincode: str,
-        permanent_address_line1: str,
-        permanent_city: str,
-        permanent_state: str,
-        permanent_pincode: str,
-        account_holder_name: str,
-        bank_name: str,
-        account_number: str,
-        ifsc_code: str,
-        circle: str,
-        district: str,
-        block: str,
-        current_salary: Any,
-        asking_salary: Any,
+        hero_category: Optional[str] = None,
+        role_applied: Optional[str] = None,
+        full_name: Optional[str] = None,
+        mobile_number: Optional[str] = None,
+        email: Optional[str] = None,
+        aadhaar_number: Optional[str] = None,
+        pan_number: Optional[str] = None,
+        current_address_line1: Optional[str] = None,
+        current_city: Optional[str] = None,
+        current_state: Optional[str] = None,
+        current_pincode: Optional[str] = None,
+        permanent_address_line1: Optional[str] = None,
+        permanent_city: Optional[str] = None,
+        permanent_state: Optional[str] = None,
+        permanent_pincode: Optional[str] = None,
+        account_holder_name: Optional[str] = None,
+        bank_name: Optional[str] = None,
+        account_number: Optional[str] = None,
+        ifsc_code: Optional[str] = None,
+        circle: Optional[str] = None,
+        district: Optional[str] = None,
+        block: Optional[str] = None,
+        current_salary: Optional[Any] = None,
+        asking_salary: Optional[Any] = None,
         negotiated_salary: Optional[Any] = None,
         current_address_line2: Optional[str] = None,
-        current_country: str = "India",
+        current_country: Optional[str] = "India",
         is_permanent_same: bool = False,
         permanent_address_line2: Optional[str] = None,
-        permanent_country: str = "India",
+        permanent_country: Optional[str] = "India",
         branch_name: Optional[str] = None,
         status: str = APPLICATION_STATUS_PENDING,
         **kwargs: Any,
@@ -272,8 +272,16 @@ class CandidateApplication(db.Model):
         self.circle = circle
         self.district = district
         self.block = block
-        self.current_salary = Decimal(str(current_salary)) if current_salary is not None else Decimal(0)
-        self.asking_salary = Decimal(str(asking_salary)) if asking_salary is not None else Decimal(0)
+        self.current_salary = (
+            Decimal(str(current_salary))
+            if current_salary is not None and str(current_salary).strip() != ""
+            else None
+        )
+        self.asking_salary = (
+            Decimal(str(asking_salary))
+            if asking_salary is not None and str(asking_salary).strip() != ""
+            else None
+        )
         self.negotiated_salary = (
             Decimal(str(negotiated_salary))
             if negotiated_salary is not None and str(negotiated_salary).strip() != ""

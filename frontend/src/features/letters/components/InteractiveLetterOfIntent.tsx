@@ -61,16 +61,16 @@ export const InteractiveLetterOfIntent: React.FC<InteractiveLetterOfIntentProps>
   loiFields,
   onFieldChange,
 }) => {
-  const candName = loiFields.candidate_full_name || loiFields.candidate_name || 'Candidate Name';
-  const candAddress = loiFields.candidate_address || 'Address Details';
-  const candMobile = loiFields.candidate_mobile || loiFields.mobile_number || 'Mobile Number';
-  const candEmail = loiFields.candidate_email || loiFields.email || '-';
-  const candAadhaar = loiFields.candidate_aadhaar || '-';
-  const approvedRole = loiFields.approved_role_name || loiFields.role_applied || 'HDD Operator';
-  const approvedLoc = loiFields.approved_location || 'Rajasthan, Ajmer';
-  const joiningDate = loiFields.joining_date || '01/11/2026';
+  const candName = loiFields.candidate_full_name || loiFields.candidate_name || '';
+  const candAddress = loiFields.candidate_address || '';
+  const candMobile = loiFields.candidate_mobile || loiFields.mobile_number || '';
+  const candEmail = loiFields.candidate_email || loiFields.email || '';
+  const candAadhaar = loiFields.candidate_aadhaar && loiFields.candidate_aadhaar !== '-' ? loiFields.candidate_aadhaar : '';
+  const approvedRole = loiFields.approved_role_name || loiFields.role_applied || '';
+  const approvedLoc = loiFields.approved_location || '';
+  const joiningDate = loiFields.joining_date || '';
   const curDate = loiFields.current_date || loiFields.date || new Date().toLocaleDateString('en-GB');
-  const monthlySalary = loiFields.monthly_salary || '40000';
+  const monthlySalary = loiFields.monthly_salary || '';
   const totalSalary = loiFields.total_salary || monthlySalary;
 
   const defaultFooter =
