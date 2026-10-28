@@ -24,6 +24,22 @@ def main():
             alembic_command.upgrade(alembic_cfg, "head")
         print(">> Migrations complete!\n")
 
+    elif command == "makemigrations":
+        from alembic.config import Config
+        from alembic import command as alembic_command
+        msg = args[1] if len(args) > 1 else "auto_migration"
+        print(f"\n>> Generating migration file: {msg}...")
+        with app.app_context():
+            alembic_cfg = Config("migrations/alembic.ini")
+            alembic_command.revision(alembic_cfg, message=msg, autogenerate=True)
+
+    elif command == "history":
+        from alembic.config import Config
+        from alembic import command as alembic_command
+        with app.app_context():
+            alembic_cfg = Config("migrations/alembic.ini")
+            alembic_command.history(alembic_cfg)
+
     elif command == "seed":
         from seed import seed_database
         seed_database()
@@ -37,7 +53,7 @@ def main():
 
     else:
         print(f"Unknown command: '{command}'")
-        print("Available commands: runserver, migrate, seed, routes")
+        print("Available commands: runserver, migrate, makemigrations, history, seed, routes")
         sys.exit(1)
 
 
