@@ -31,6 +31,7 @@ def create_app(config_class=None) -> Flask:
     cors.init_app(
         app,
         resources={r"/api/*": {"origins": app.config.get("CORS_ORIGINS", ["*"])}},
+        expose_headers=["Content-Disposition"],
         supports_credentials=True,
     )
 
@@ -48,12 +49,17 @@ def create_app(config_class=None) -> Flask:
         session_cookie_secure=is_prod,
     )
 
+    app.url_map.strict_slashes = False
+
     register_error_handlers(app)
     app.register_blueprint(auth_bp)
     app.register_blueprint(candidates_bp)
+    app.register_blueprint(candidates_bp, name="candidates_legacy", url_prefix="/api/v1/candidates")
     app.register_blueprint(locations_bp)
     app.register_blueprint(letters_bp)
 
+    @app.route("/health", methods=["GET"])
+    @app.route("/api/health", methods=["GET"])
     @app.route("/api/v1/health", methods=["GET"])
     def health_check():
         return jsonify(
@@ -67,6 +73,12 @@ def create_app(config_class=None) -> Flask:
     with app.app_context():
         from app.modules.auth.permissions import ensure_system_permissions
         ensure_system_permissions()
+
+        try:
+            from app.modules.candidates.schema_maintenance import ensure_candidate_schema
+            ensure_candidate_schema()
+        except Exception as e:
+            app.logger.warning(f"Candidate schema synchronization deferred: {e}")
 
         try:
             from app.modules.letters.services import LetterTemplateService

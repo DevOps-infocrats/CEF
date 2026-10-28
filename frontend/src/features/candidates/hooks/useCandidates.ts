@@ -1,18 +1,60 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { candidateService } from '../services/candidateService';
 import { CandidateApplicationFormOutput } from '../schemas';
-import { DocumentCategory, CreateRolePayload, UpdateRolePayload } from '../types';
+import { DocumentCategory, CreateRolePayload, UpdateRolePayload, CandidateFilterParams } from '../types';
 import { useToast } from '@/components/Toast';
 
 export const CANDIDATES_QUERY_KEY = ['candidate-applications'];
+export const APPLICATION_CREATORS_QUERY_KEY = ['candidate-application-creators'];
 export const STAGED_DOCS_QUERY_KEY = ['candidate-staged-documents'];
 
-export const useMyApplications = (options?: { enabled?: boolean }) => {
+export const useMyApplications = (
+  filtersOrOptions?: CandidateFilterParams | { enabled?: boolean },
+  options?: { enabled?: boolean }
+) => {
+  let filters: CandidateFilterParams | undefined = undefined;
+  let enabled: boolean | undefined = undefined;
+
+  if (filtersOrOptions) {
+    if (
+      'enabled' in filtersOrOptions &&
+      Object.keys(filtersOrOptions).length === 1 &&
+      typeof (filtersOrOptions as any).enabled === 'boolean'
+    ) {
+      enabled = (filtersOrOptions as any).enabled;
+    } else {
+      filters = filtersOrOptions as CandidateFilterParams;
+      enabled = options?.enabled;
+    }
+  }
+
   return useQuery({
-    queryKey: CANDIDATES_QUERY_KEY,
-    queryFn: () => candidateService.getMyApplications(),
+    queryKey: [...CANDIDATES_QUERY_KEY, filters || {}],
+    queryFn: () => candidateService.getMyApplications(filters),
+    placeholderData: (previousData) => previousData,
     staleTime: 1000 * 60 * 2, // 2 minutes
-    enabled: options?.enabled !== undefined ? options.enabled : true,
+    enabled: enabled !== undefined ? enabled : true,
+  });
+};
+
+export const useApplicationCreators = () => {
+  return useQuery({
+    queryKey: APPLICATION_CREATORS_QUERY_KEY,
+    queryFn: () => candidateService.getApplicationCreators(),
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+};
+
+export const useDownloadCandidatesReport = () => {
+  const { success, error } = useToast();
+  return useMutation({
+    mutationFn: (filters?: CandidateFilterParams) => candidateService.downloadExcelReport(filters),
+    onSuccess: () => {
+      success('Candidate report downloaded successfully.');
+    },
+    onError: (err: any) => {
+      error(err?.response?.data?.message || 'Failed to download candidate report.');
+    },
   });
 };
 
@@ -33,6 +75,7 @@ export const useCreateApplication = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: CANDIDATES_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: STAGED_DOCS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: APPLICATION_CREATORS_QUERY_KEY });
     },
   });
 };

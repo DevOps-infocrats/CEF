@@ -99,6 +99,8 @@ export interface VerificationApplication {
   verification_progress: VerificationProgress;
 
   status: ApplicationOverallStatus;
+  created_by_id?: string | null;
+  created_by_name?: string | null;
   reviewed_by_id?: string | null;
   reviewed_by_name?: string | null;
   reviewed_at?: string | null;

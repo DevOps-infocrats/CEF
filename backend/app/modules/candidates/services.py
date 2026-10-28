@@ -1,8 +1,13 @@
 import os
 import uuid
+import io
+import zoneinfo
 from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 from werkzeug.utils import secure_filename
 from werkzeug.datastructures import FileStorage
 from flask import current_app
@@ -11,7 +16,13 @@ from app.extensions import db
 from app.common.database.transactions import atomic
 from app.common.errors.exceptions import ValidationError, NotFoundError, ForbiddenError
 from app.common.permissions.authorization import AuthorizationEvaluator
-from app.modules.auth.models import AuditLog
+from app.modules.auth.models import AuditLog, User
+
+REPORT_TIMEZONE_NAME = "Asia/Kolkata"
+try:
+    REPORT_TIMEZONE = zoneinfo.ZoneInfo(REPORT_TIMEZONE_NAME)
+except Exception:
+    REPORT_TIMEZONE = timezone.utc
 from app.modules.candidates.models import (
     CandidateApplication,
     CandidateDocument,
@@ -244,10 +255,19 @@ class CandidateService:
         data: Dict[str, Any],
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
+        created_by_id: Optional[uuid.UUID] = None,
     ) -> CandidateApplication:
         """Create and persist a candidate application and link uploaded documents inside an atomic transaction."""
+        # Ensure database schema is synchronized (remedies missing columns or constraints)
+        try:
+            from app.modules.candidates.schema_maintenance import ensure_candidate_schema
+            ensure_candidate_schema()
+        except Exception:
+            pass
+
         app_id = uuid.uuid4()
         app_number = generate_application_number()
+        creator_user_id = created_by_id or user_id
 
         # Handle permanent address sync if flagged
         is_same = bool(data.get("is_permanent_same", False))
@@ -285,6 +305,7 @@ class CandidateService:
             dist_map = {}
 
             # Reuse validated models from schema validation if present, avoiding redundant DB queries
+            seen_dist_names = set()
             if district_ids:
                 if "_validated_districts" in data:
                     dist_models = data["_validated_districts"]
@@ -297,27 +318,32 @@ class CandidateService:
                 dist_map = {d.id: d.name for d in dist_models}
                 district_summary = ", ".join(d.name for d in dist_models)
                 for d in dist_models:
-                    app_districts.append(
-                        CandidateApplicationDistrict(
-                            id=uuid.uuid4(),
-                            application_id=app_id,
-                            district_id=d.id,
-                            district_name=d.name,
-                        )
-                    )
-            else:
-                district_summary = (data.get("district") or "").strip()
-                if district_summary:
-                    for d_name in [s.strip() for s in district_summary.split(",") if s.strip()]:
+                    if d.name not in seen_dist_names:
+                        seen_dist_names.add(d.name)
                         app_districts.append(
                             CandidateApplicationDistrict(
                                 id=uuid.uuid4(),
                                 application_id=app_id,
-                                district_id=None,
-                                district_name=d_name,
+                                district_id=d.id,
+                                district_name=d.name,
                             )
                         )
+            else:
+                district_summary = (data.get("district") or "").strip()
+                if district_summary:
+                    for d_name in [s.strip() for s in district_summary.split(",") if s.strip()]:
+                        if d_name not in seen_dist_names:
+                            seen_dist_names.add(d_name)
+                            app_districts.append(
+                                CandidateApplicationDistrict(
+                                    id=uuid.uuid4(),
+                                    application_id=app_id,
+                                    district_id=None,
+                                    district_name=d_name,
+                                )
+                            )
 
+            seen_block_keys = set()
             if block_ids:
                 if "_validated_blocks" in data:
                     blk_models = data["_validated_blocks"]
@@ -330,30 +356,36 @@ class CandidateService:
                 block_summary = ", ".join(b.name for b in blk_models)
                 for b in blk_models:
                     d_name = dist_map.get(b.district_id)
-                    app_blocks.append(
-                        CandidateApplicationBlock(
-                            id=uuid.uuid4(),
-                            application_id=app_id,
-                            block_id=b.id,
-                            district_id=b.district_id,
-                            block_name=b.name,
-                            district_name=d_name,
-                        )
-                    )
-            else:
-                block_summary = (data.get("block") or "").strip()
-                if block_summary:
-                    for b_name in [s.strip() for s in block_summary.split(",") if s.strip()]:
+                    key = (b.name, d_name)
+                    if key not in seen_block_keys:
+                        seen_block_keys.add(key)
                         app_blocks.append(
                             CandidateApplicationBlock(
                                 id=uuid.uuid4(),
                                 application_id=app_id,
-                                block_id=None,
-                                district_id=None,
-                                block_name=b_name,
-                                district_name=None,
+                                block_id=b.id,
+                                district_id=b.district_id,
+                                block_name=b.name,
+                                district_name=d_name,
                             )
                         )
+            else:
+                block_summary = (data.get("block") or "").strip()
+                if block_summary:
+                    for b_name in [s.strip() for s in block_summary.split(",") if s.strip()]:
+                        key = (b_name, None)
+                        if key not in seen_block_keys:
+                            seen_block_keys.add(key)
+                            app_blocks.append(
+                                CandidateApplicationBlock(
+                                    id=uuid.uuid4(),
+                                    application_id=app_id,
+                                    block_id=None,
+                                    district_id=None,
+                                    block_name=b_name,
+                                    district_name=None,
+                                )
+                            )
 
             raw_email = _clean_str(data.get("email"))
             raw_pan = _clean_str(data.get("pan_number"))
@@ -363,6 +395,7 @@ class CandidateService:
                 id=app_id,
                 application_number=app_number,
                 user_id=user_id,
+                created_by_id=creator_user_id,
                 hero_category=_clean_str(data.get("hero_category")) or "Hero 1",
                 role_applied=_clean_str(data.get("role_applied")) or "",
                 full_name=_clean_str(data.get("full_name")),
@@ -397,6 +430,9 @@ class CandidateService:
                 status=APPLICATION_STATUS_PENDING,
             )
 
+            if creator_user_id:
+                application.created_by = db.session.get(User, creator_user_id)
+
             # Attach child collections
             application.selected_districts = app_districts
             application.selected_blocks = app_blocks
@@ -414,7 +450,7 @@ class CandidateService:
 
             # Record audit event
             audit = AuditLog(
-                user_id=user_id,
+                user_id=creator_user_id,
                 action="CANDIDATE_APPLICATION_SUBMITTED",
                 resource="CandidateApplication",
                 resource_id=str(app_id),
@@ -499,15 +535,18 @@ class CandidateService:
                             CandidateApplicationDistrict.application_id == application.id
                         )
                     )
+                    seen_dist_names = set()
                     for d in dist_models:
-                        db.session.add(
-                            CandidateApplicationDistrict(
-                                id=uuid.uuid4(),
-                                application_id=application.id,
-                                district_id=d.id,
-                                district_name=d.name,
+                        if d.name not in seen_dist_names:
+                            seen_dist_names.add(d.name)
+                            db.session.add(
+                                CandidateApplicationDistrict(
+                                    id=uuid.uuid4(),
+                                    application_id=application.id,
+                                    district_id=d.id,
+                                    district_name=d.name,
+                                )
                             )
-                        )
                 elif "district" in data:
                     application.district = _clean_str(data["district"])
 
@@ -525,17 +564,22 @@ class CandidateService:
                             CandidateApplicationBlock.application_id == application.id
                         )
                     )
+                    seen_block_keys = set()
                     for b in blk_models:
-                        db.session.add(
-                            CandidateApplicationBlock(
-                                id=uuid.uuid4(),
-                                application_id=application.id,
-                                block_id=b.id,
-                                district_id=b.district_id,
-                                block_name=b.name,
-                                district_name=b.district.name if b.district else None,
+                        d_name = b.district.name if b.district else None
+                        key = (b.name, d_name)
+                        if key not in seen_block_keys:
+                            seen_block_keys.add(key)
+                            db.session.add(
+                                CandidateApplicationBlock(
+                                    id=uuid.uuid4(),
+                                    application_id=application.id,
+                                    block_id=b.id,
+                                    district_id=b.district_id,
+                                    block_name=b.name,
+                                    district_name=d_name,
+                                )
                             )
-                        )
                 elif "block" in data:
                     application.block = _clean_str(data["block"])
 
@@ -1431,5 +1475,395 @@ class CandidateService:
                 },
             )
             db.session.add(audit)
-
         return application
+
+    @staticmethod
+    def generate_candidates_excel_report(
+        applications: List[CandidateApplication],
+        current_user: Optional[Any] = None,
+    ) -> io.BytesIO:
+        """Generate a professionally styled Excel report matching the required columns and timezone."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Candidate Applications"
+
+        # Ensure gridlines are visible
+        ws.views.sheetView[0].showGridLines = True
+
+        # Check authorization to view unmasked sensitive fields (Aadhaar, PAN, Bank Details)
+        can_view_sensitive = True
+        if current_user:
+            from app.common.permissions.authorization import AuthorizationEvaluator
+            can_view_sensitive = (
+                AuthorizationEvaluator.has_required_permission(current_user, "documents:verify")
+                or AuthorizationEvaluator.has_required_permission(current_user, "candidates:approve")
+                or AuthorizationEvaluator.has_required_permission(current_user, "candidates:review")
+                or AuthorizationEvaluator.has_required_permission(current_user, "users:manage")
+                or "admin" in getattr(current_user, "role_names", [])
+                or "reviewer" in getattr(current_user, "role_names", [])
+                or "officer" in getattr(current_user, "role_names", [])
+            )
+
+        headers = [
+            # 1-7: Original 7 columns preserved in exact order
+            "Candidate Application ID",
+            "Candidate Name",
+            "HR / Creator Name",
+            "Creation Date",
+            "Creation Time",
+            "Current Candidate Status",
+            "Candidate Designation / Role",
+            # 8-45: All remaining available candidate details
+            "Hero Category",
+            "Mobile Number",
+            "Email Address",
+            "Aadhaar Number",
+            "PAN Number",
+            "Current Address Line 1",
+            "Current Address Line 2",
+            "Current City",
+            "Current State",
+            "Current Pincode",
+            "Current Country",
+            "Permanent Address Same as Current",
+            "Permanent Address Line 1",
+            "Permanent Address Line 2",
+            "Permanent City",
+            "Permanent State",
+            "Permanent Pincode",
+            "Permanent Country",
+            "Account Holder Name",
+            "Bank Name",
+            "Account Number",
+            "IFSC Code",
+            "Branch Name",
+            "Circle",
+            "District",
+            "Block",
+            "Current Salary",
+            "Asking Salary",
+            "Negotiated Salary",
+            "Joining Date",
+            "Uploaded Documents",
+            "Document Verification Status",
+            "Reviewed By",
+            "Reviewed At",
+            "Rejection Reason",
+            "Offer Acceptance Status",
+            "Offer Accepted At",
+            "Offer Accepted By",
+        ]
+
+        # Header styling: Dark slate fill, bold white text, centered
+        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        data_font = Font(name="Calibri", size=10)
+        data_alignment_left = Alignment(horizontal="left", vertical="center")
+        data_alignment_center = Alignment(horizontal="center", vertical="center")
+        data_alignment_right = Alignment(horizontal="right", vertical="center")
+
+        thin_border_side = Side(border_style="thin", color="CBD5E1")
+        cell_border = Border(
+            left=thin_border_side,
+            right=thin_border_side,
+            top=thin_border_side,
+            bottom=thin_border_side,
+        )
+
+        ws.append(headers)
+        ws.row_dimensions[1].height = 28
+
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+            cell.border = cell_border
+
+        alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+
+        # Set of column indexes (1-based) that should be center-aligned or right-aligned
+        center_col_indices = {1, 4, 5, 6, 8, 9, 11, 12, 17, 19, 24, 29, 37, 41, 43, 44}
+        right_col_indices = {34, 35, 36}
+
+        for row_idx, app in enumerate(applications, start=2):
+            ws.row_dimensions[row_idx].height = 22
+            is_alt = (row_idx % 2 == 1)
+
+            # 1. Application ID
+            app_id = app.application_number or ""
+
+            # 2. Candidate Name
+            cand_name = app.full_name or ""
+
+            # 3. Creator HR Name
+            if getattr(app, "created_by", None):
+                creator_name = (
+                    app.created_by.full_name
+                    or app.created_by.username
+                    or app.created_by.email
+                    or ""
+                )
+            elif getattr(app, "created_by_id", None):
+                from app.modules.auth.models import User
+                creator = db.session.get(User, app.created_by_id)
+                creator_name = (
+                    creator.full_name or creator.username or creator.email
+                    if creator else ""
+                )
+            else:
+                creator_name = ""
+
+            # 4 & 5. Timestamps
+            created_at = getattr(app, "created_at", None)
+            if created_at:
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                local_dt = created_at.astimezone(REPORT_TIMEZONE)
+                creation_date = local_dt.strftime("%Y-%m-%d")
+                creation_time = local_dt.strftime("%H:%M:%S")
+            else:
+                creation_date = ""
+                creation_time = ""
+
+            # 6. Status
+            status = app.status or ""
+
+            # 7. Designation / Role
+            designation = app.role_applied or ""
+
+            # 8. Hero Category
+            hero_category = app.hero_category or ""
+
+            # 9. Mobile Number
+            mobile = app.mobile_number or ""
+
+            # 10. Email Address
+            email = app.email or ""
+
+            # 11. Aadhaar Number
+            raw_aadhaar = app.aadhaar_number or ""
+            if raw_aadhaar and not can_view_sensitive:
+                aadhaar_val = f"••••••••{raw_aadhaar[-4:]}" if len(raw_aadhaar) >= 4 else raw_aadhaar
+            else:
+                aadhaar_val = raw_aadhaar
+
+            # 12. PAN Number
+            raw_pan = app.pan_number or ""
+            if raw_pan and not can_view_sensitive:
+                pan_val = f"••••••{raw_pan[-4:]}" if len(raw_pan) >= 4 else raw_pan
+            else:
+                pan_val = raw_pan
+
+            # 13-18. Current Address
+            curr_line1 = app.current_address_line1 or ""
+            curr_line2 = app.current_address_line2 or ""
+            curr_city = app.current_city or ""
+            curr_state = app.current_state or ""
+            curr_pincode = app.current_pincode or ""
+            curr_country = app.current_country or ""
+
+            # 19. Permanent Address Same as Current
+            if app.is_permanent_same is True:
+                perm_same_val = "Yes"
+            elif app.is_permanent_same is False:
+                perm_same_val = "No"
+            else:
+                perm_same_val = ""
+
+            # 20-25. Permanent Address
+            perm_line1 = app.permanent_address_line1 or ""
+            perm_line2 = app.permanent_address_line2 or ""
+            perm_city = app.permanent_city or ""
+            perm_state = app.permanent_state or ""
+            perm_pincode = app.permanent_pincode or ""
+            perm_country = app.permanent_country or ""
+
+            # 26-30. Bank Details
+            acc_holder = app.account_holder_name or ""
+            bank_name = app.bank_name or ""
+            raw_acc = app.account_number or ""
+            if raw_acc and not can_view_sensitive:
+                acc_val = f"••••••••{raw_acc[-4:]}" if len(raw_acc) >= 4 else raw_acc
+            else:
+                acc_val = raw_acc
+            ifsc_code = app.ifsc_code or ""
+            branch_name = app.branch_name or ""
+
+            # 31-33. Location Allocation
+            circle = app.circle or ""
+            selected_dists = getattr(app, "selected_districts", None)
+            if selected_dists:
+                district_val = ", ".join(d.district_name for d in selected_dists if d.district_name)
+            else:
+                district_val = app.district or ""
+
+            selected_blks = getattr(app, "selected_blocks", None)
+            if selected_blks:
+                block_val = ", ".join(b.block_name for b in selected_blks if b.block_name)
+            else:
+                block_val = app.block or ""
+
+            # 34-36. Salary Details
+            curr_sal = str(app.current_salary) if app.current_salary is not None else ""
+            ask_sal = str(app.asking_salary) if app.asking_salary is not None else ""
+            neg_sal = str(app.negotiated_salary) if app.negotiated_salary is not None else ""
+
+            # 37. Joining Date
+            joining_date = app.joining_date or ""
+
+            # 38. Uploaded Documents
+            docs = getattr(app, "documents", None) or []
+            if docs:
+                doc_list = []
+                for d in docs:
+                    cat_name = (d.category or "Document").replace("_", " ").title()
+                    orig_file = d.original_filename or ""
+                    if orig_file:
+                        doc_list.append(f"{cat_name} ({orig_file})")
+                    else:
+                        doc_list.append(cat_name)
+                uploaded_docs_val = ", ".join(doc_list)
+            else:
+                uploaded_docs_val = ""
+
+            # 39. Document Verification Status
+            v_items = getattr(app, "verification_items", None) or []
+            if v_items:
+                item_list = [f"{item.item_label or item.item_key}: {item.status}" for item in v_items]
+                verification_val = "; ".join(item_list)
+            else:
+                verification_val = ""
+
+            # 40-42. Review Information
+            if getattr(app, "reviewed_by", None):
+                reviewer_val = (
+                    app.reviewed_by.full_name
+                    or app.reviewed_by.username
+                    or app.reviewed_by.email
+                    or ""
+                )
+            elif getattr(app, "reviewed_by_id", None):
+                from app.modules.auth.models import User
+                rev = db.session.get(User, app.reviewed_by_id)
+                reviewer_val = rev.full_name or rev.username or rev.email if rev else ""
+            else:
+                reviewer_val = ""
+
+            rev_dt = getattr(app, "reviewed_at", None)
+            if rev_dt:
+                if rev_dt.tzinfo is None:
+                    rev_dt = rev_dt.replace(tzinfo=timezone.utc)
+                reviewed_at_val = rev_dt.astimezone(REPORT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                reviewed_at_val = ""
+
+            rejection_reason = app.rejection_reason or ""
+
+            # 43-45. Offer Acceptance Details
+            offer_acceptance_status = app.offer_acceptance_status or ""
+
+            acc_dt = getattr(app, "offer_accepted_at", None)
+            if acc_dt:
+                if acc_dt.tzinfo is None:
+                    acc_dt = acc_dt.replace(tzinfo=timezone.utc)
+                offer_accepted_at_val = acc_dt.astimezone(REPORT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                offer_accepted_at_val = ""
+
+            if getattr(app, "offer_accepted_by", None):
+                acceptor_val = (
+                    app.offer_accepted_by.full_name
+                    or app.offer_accepted_by.username
+                    or app.offer_accepted_by.email
+                    or ""
+                )
+            elif getattr(app, "offer_accepted_by_id", None):
+                from app.modules.auth.models import User
+                acc_user = db.session.get(User, app.offer_accepted_by_id)
+                acceptor_val = acc_user.full_name or acc_user.username or acc_user.email if acc_user else ""
+            else:
+                acceptor_val = ""
+
+            row_values = [
+                # 1-7 (Original 7 preserved)
+                app_id,
+                cand_name,
+                creator_name,
+                creation_date,
+                creation_time,
+                status,
+                designation,
+                # 8-45 (Additional fields)
+                hero_category,
+                mobile,
+                email,
+                aadhaar_val,
+                pan_val,
+                curr_line1,
+                curr_line2,
+                curr_city,
+                curr_state,
+                curr_pincode,
+                curr_country,
+                perm_same_val,
+                perm_line1,
+                perm_line2,
+                perm_city,
+                perm_state,
+                perm_pincode,
+                perm_country,
+                acc_holder,
+                bank_name,
+                acc_val,
+                ifsc_code,
+                branch_name,
+                circle,
+                district_val,
+                block_val,
+                curr_sal,
+                ask_sal,
+                neg_sal,
+                joining_date,
+                uploaded_docs_val,
+                verification_val,
+                reviewer_val,
+                reviewed_at_val,
+                rejection_reason,
+                offer_acceptance_status,
+                offer_accepted_at_val,
+                acceptor_val,
+            ]
+
+            ws.append(row_values)
+
+            for col_idx in range(1, len(row_values) + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.font = data_font
+                cell.border = cell_border
+                if is_alt:
+                    cell.fill = alt_fill
+
+                if col_idx in center_col_indices:
+                    cell.alignment = data_alignment_center
+                elif col_idx in right_col_indices:
+                    cell.alignment = data_alignment_right
+                else:
+                    cell.alignment = data_alignment_left
+
+        # Adjust column widths automatically with padding, capping max length to prevent overly wide columns
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val_str = str(cell.value or "")
+                max_len = max(max_len, min(len(val_str), 50))
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return buf
+

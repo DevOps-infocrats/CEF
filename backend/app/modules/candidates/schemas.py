@@ -411,12 +411,26 @@ class CandidateApplicationResponseSchema(Schema):
     verification_progress = fields.Method("get_verification_progress", dump_only=True)
 
     status = fields.String(dump_only=True)
+    created_by_id = fields.UUID(dump_only=True, allow_none=True)
+    created_by_name = fields.Method("get_creator_name", dump_only=True)
     reviewed_by_id = fields.UUID(dump_only=True, allow_none=True)
     reviewed_by_name = fields.Method("get_reviewer_name", dump_only=True)
     reviewed_at = fields.DateTime(dump_only=True, allow_none=True)
     rejection_reason = fields.String(dump_only=True, allow_none=True)
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
+
+    def get_creator_name(self, obj) -> Optional[str]:
+        if getattr(obj, "created_by", None):
+            return obj.created_by.full_name or obj.created_by.username or obj.created_by.email
+        created_by_id = getattr(obj, "created_by_id", None)
+        if created_by_id:
+            from app.modules.auth.models import User
+            from app.extensions import db
+            creator = db.session.get(User, created_by_id)
+            if creator:
+                return creator.full_name or creator.username or creator.email
+        return None
 
     def get_reviewer_name(self, obj) -> Optional[str]:
         if getattr(obj, "reviewed_by", None):

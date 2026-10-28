@@ -1,5 +1,6 @@
 import os
 import uuid
+from datetime import datetime
 from flask import Blueprint, request, g, send_file
 from sqlalchemy import select, func
 from app.extensions import db
@@ -21,13 +22,15 @@ from app.modules.candidates.schemas import (
     CreateApplicationRoleSchema,
     UpdateApplicationRoleSchema,
 )
-from app.modules.candidates.services import CandidateService
+from app.modules.candidates.services import CandidateService, REPORT_TIMEZONE
 from app.modules.candidates.selectors import (
     get_application_by_id,
     get_applications_by_user_id,
     list_all_applications,
     get_document_by_id,
     get_staged_documents_by_user_id,
+    query_applications,
+    get_application_creators,
 )
 
 candidates_bp = Blueprint("candidates", __name__, url_prefix="/api/v1/applications")
@@ -166,6 +169,7 @@ def submit_application():
         data=validated_data,
         ip_address=ip_address,
         user_agent=user_agent,
+        created_by_id=user.id,
     )
 
     response_data = getattr(application, "_cached_dump", None) or _response_schema.dump(application)
@@ -180,7 +184,7 @@ def submit_application():
 @candidates_bp.route("", methods=["GET"])
 @require_auth
 def list_applications():
-    """List candidate applications. Verifiers/Admins see all; applicants see their own."""
+    """List candidate applications with optional filtering. Verifiers/Admins see all; applicants see their own."""
     user = g.current_user
 
     # User must have permission to read candidates
@@ -195,16 +199,120 @@ def list_applications():
         or "admin" in user.role_names
     )
 
-    if can_view_all:
-        applications = list_all_applications()
-    else:
-        applications = get_applications_by_user_id(user.id)
+    candidate_name = request.args.get("candidate_name") or request.args.get("search")
+    hr_name = request.args.get("hr_name")
+    created_by_id_str = request.args.get("created_by_id")
+    start_date = request.args.get("start_date")
+    end_date = request.args.get("end_date")
+    status = request.args.get("status")
+
+    created_by_id = None
+    if created_by_id_str:
+        try:
+            created_by_id = uuid.UUID(created_by_id_str)
+        except (ValueError, TypeError):
+            pass
+
+    filter_user_id = None if can_view_all else user.id
+
+    applications = query_applications(
+        user_id=filter_user_id,
+        candidate_name=candidate_name,
+        hr_name=hr_name,
+        created_by_id=created_by_id,
+        start_date=start_date,
+        end_date=end_date,
+        status=status,
+    )
 
     return api_response(
         data=_list_schema.dump(applications),
         message="Applications retrieved successfully.",
         status_code=200,
     )
+
+
+@candidates_bp.route("/creators", methods=["GET"])
+@require_auth
+def list_application_creators():
+    """List distinct HR users who have created candidate applications."""
+    user = g.current_user
+    if not AuthorizationEvaluator.has_required_permission(user, "candidates:read"):
+        raise ForbiddenError("Missing required permission: 'candidates:read'.")
+
+    can_view_all = (
+        AuthorizationEvaluator.has_required_permission(user, "documents:verify")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:review")
+        or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or "admin" in user.role_names
+    )
+
+    filter_user_id = None if can_view_all else user.id
+    creators = get_application_creators(user_id=filter_user_id)
+    return api_response(
+        data=creators,
+        message="Application creators retrieved successfully.",
+        status_code=200,
+    )
+
+
+@candidates_bp.route("/export", methods=["GET"])
+@require_auth
+def export_candidates_excel():
+    """Export filtered candidate records as a styled Excel spreadsheet."""
+    user = g.current_user
+    if not AuthorizationEvaluator.has_required_permission(user, "candidates:read"):
+        raise ForbiddenError("Missing required permission: 'candidates:read'.")
+
+    can_view_all = (
+        AuthorizationEvaluator.has_required_permission(user, "documents:verify")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:review")
+        or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or "admin" in user.role_names
+    )
+
+    candidate_name = request.args.get("candidate_name") or request.args.get("search")
+    hr_name = request.args.get("hr_name")
+    created_by_id_str = request.args.get("created_by_id")
+    start_date = request.args.get("start_date")
+    end_date = request.args.get("end_date")
+    status = request.args.get("status")
+
+    created_by_id = None
+    if created_by_id_str:
+        try:
+            created_by_id = uuid.UUID(created_by_id_str)
+        except (ValueError, TypeError):
+            pass
+
+    filter_user_id = None if can_view_all else user.id
+
+    applications = query_applications(
+        user_id=filter_user_id,
+        candidate_name=candidate_name,
+        hr_name=hr_name,
+        created_by_id=created_by_id,
+        start_date=start_date,
+        end_date=end_date,
+        status=status,
+    )
+
+    excel_buffer = CandidateService.generate_candidates_excel_report(applications, current_user=user)
+
+    # Filename format requirement: CEF_Candidate_Report_YYYY-MM-DD.xlsx
+    today_str = datetime.now(REPORT_TIMEZONE).strftime("%Y-%m-%d")
+    filename = f"CEF_Candidate_Report_{today_str}.xlsx"
+
+    response = send_file(
+        excel_buffer,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
+    response.headers["Access-Control-Expose-Headers"] = "Content-Disposition"
+    return response
 
 
 @candidates_bp.route("/<string:app_id>", methods=["GET"])

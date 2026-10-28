@@ -141,8 +141,25 @@ export interface CandidateApplicationResponse {
 
   joining_date?: string | null;
   status: string;
+  created_by_id?: string | null;
+  created_by_name?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CandidateFilterParams {
+  candidate_name?: string;
+  hr_name?: string;
+  created_by_id?: string;
+  start_date?: string;
+  end_date?: string;
+  status?: string;
+}
+
+export interface ApplicationCreator {
+  id: string;
+  name: string;
+  email: string;
 }
 
 export interface ApplicationsListResponse {

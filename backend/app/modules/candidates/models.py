@@ -126,6 +126,12 @@ class CandidateApplication(db.Model):
 
     # Status & Timestamps
     status: Mapped[str] = mapped_column(String(50), default=APPLICATION_STATUS_PENDING, nullable=False)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     reviewed_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -166,6 +172,7 @@ class CandidateApplication(db.Model):
 
     # Relationships
     user: Mapped["User"] = relationship("User", foreign_keys=[user_id], backref="applications")
+    created_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[created_by_id])
     reviewed_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[reviewed_by_id])
     offer_accepted_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[offer_accepted_by_id])
     documents: Mapped[list["CandidateDocument"]] = relationship(
@@ -208,6 +215,7 @@ class CandidateApplication(db.Model):
         self,
         application_number: str,
         user_id: uuid.UUID,
+        created_by_id: Optional[uuid.UUID] = None,
         hero_category: Optional[str] = None,
         role_applied: Optional[str] = None,
         full_name: Optional[str] = None,
@@ -244,6 +252,7 @@ class CandidateApplication(db.Model):
     ):
         self.application_number = application_number
         self.user_id = user_id
+        self.created_by_id = created_by_id
         self.hero_category = hero_category
         self.role_applied = role_applied
         self.full_name = full_name

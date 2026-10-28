@@ -6,7 +6,7 @@ import {
   CandidateApplicationFormInput,
   CandidateApplicationFormOutput,
 } from '../schemas';
-import { HeroCategory, RoleApplied, CandidateApplicationResponse, DocumentCategory } from '../types';
+import { HeroCategory, RoleApplied, CandidateApplicationResponse, DocumentCategory, CandidateFilterParams } from '../types';
 import {
   useMyApplications,
   useCreateApplication,
@@ -80,8 +80,11 @@ export const CandidateApplicationPage: React.FC = () => {
   // Staged document upload state
   const [uploadingCategory, setUploadingCategory] = useState<DocumentCategory | null>(null);
 
+  // Filter state for submitted applications list
+  const [filters, setFilters] = useState<CandidateFilterParams>({});
+
   // Queries & Mutations
-  const { data: myAppsData, isLoading: isLoadingApps } = useMyApplications({
+  const { data: myAppsData, isLoading: isLoadingApps } = useMyApplications(filters, {
     enabled: viewMode === 'list',
   });
   const { data: stagedDocs = [] } = useStagedDocuments();
@@ -391,6 +394,8 @@ export const CandidateApplicationPage: React.FC = () => {
           isLoading={isLoadingApps}
           onNewApplication={handleStartNewApplication}
           onEditApplication={handleEditApplication}
+          filters={filters}
+          onFiltersChange={setFilters}
         />
       )}
 

@@ -13,6 +13,7 @@ import { useCurrentUser } from '@/features/auth/hooks/useAuth';
 import { VerificationStatusBadge } from '../components/VerificationStatusBadge';
 import { VerificationProgressBar } from '../components/VerificationProgressBar';
 import { BulkCandidateActionResponse } from '../types';
+import { useDownloadCandidatesReport } from '@/features/candidates/hooks/useCandidates';
 import {
   FileCheck2,
   Search,
@@ -27,6 +28,9 @@ import {
   XCircle,
   AlertTriangle,
   Check,
+  UserCheck,
+  Download,
+  Loader2,
 } from 'lucide-react';
 
 export const DocumentVerificationListPage: React.FC = () => {
@@ -58,6 +62,7 @@ export const DocumentVerificationListPage: React.FC = () => {
 
   const bulkApproveMutation = useBulkApproveApplications();
   const bulkRejectMutation = useBulkRejectApplications();
+  const downloadReportMutation = useDownloadCandidatesReport();
 
   // Calculate summary counts from genuine backend records
   const stats = useMemo(() => {
@@ -217,6 +222,26 @@ export const DocumentVerificationListPage: React.FC = () => {
           <p className="text-xs text-slate-500 mt-0.5">
             Review candidate submitted details, verify identity credentials, and record verification decisions.
           </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <GlassButton
+            variant="secondary"
+            size="sm"
+            onClick={() => downloadReportMutation.mutate({
+              candidate_name: searchQuery || undefined,
+              status: selectedStatus !== 'ALL' ? selectedStatus : undefined,
+            })}
+            disabled={downloadReportMutation.isPending}
+            leftIcon={
+              downloadReportMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+              ) : (
+                <Download className="w-4 h-4 text-indigo-600" />
+              )
+            }
+          >
+            {downloadReportMutation.isPending ? 'Generating Excel...' : 'Download Excel Report'}
+          </GlassButton>
         </div>
       </div>
 
@@ -509,6 +534,10 @@ export const DocumentVerificationListPage: React.FC = () => {
                         <div className="flex items-center gap-1 text-slate-500">
                           <Calendar className="w-3.5 h-3.5 text-slate-400" />
                           <span>Submitted on {formattedDate}</span>
+                        </div>
+                        <div className="flex items-center gap-1 text-slate-500">
+                          <UserCheck className="w-3.5 h-3.5 text-indigo-500" />
+                          <span>Created by: <strong className="text-slate-700 font-semibold">{app.created_by_name || '—'}</strong></span>
                         </div>
                       </div>
                     </div>
