@@ -58,6 +58,53 @@ def create_app(config_class=None) -> Flask:
     app.register_blueprint(locations_bp)
     app.register_blueprint(letters_bp)
 
+    @app.route("/", methods=["GET"])
+    def root_index():
+        """Root endpoint: serve frontend index.html if present, else return API gateway metadata."""
+        import os
+        from flask import send_file
+        candidate_paths = [
+            os.path.abspath(os.path.join(app.root_path, "..", "..", "frontend", "dist", "index.html")),
+            os.path.abspath(os.path.join(app.root_path, "..", "frontend", "dist", "index.html")),
+            os.path.abspath(os.path.join(app.root_path, "static", "index.html")),
+            "/usr/share/nginx/html/index.html",
+        ]
+        for p in candidate_paths:
+            if os.path.isfile(p):
+                return send_file(p)
+
+        return jsonify(
+            {
+                "service": "candidate-enrollment-portal-api",
+                "status": "healthy",
+                "version": "1.0.0",
+                "environment": app.config.get("ENV", "unknown"),
+                "message": "CEF Portal Backend API is active and operational.",
+                "endpoints": {
+                    "health": "/health",
+                    "api_health": "/api/v1/health",
+                    "api_v1": "/api/v1",
+                },
+            }
+        ), 200
+
+    @app.route("/api", methods=["GET"])
+    @app.route("/api/", methods=["GET"])
+    @app.route("/api/v1", methods=["GET"])
+    @app.route("/api/v1/", methods=["GET"])
+    def api_root():
+        """API base discovery endpoint."""
+        return jsonify(
+            {
+                "service": "candidate-enrollment-portal-api",
+                "status": "healthy",
+                "version": "1.0.0",
+                "environment": app.config.get("ENV", "unknown"),
+                "message": "CEF Portal REST API v1 is active and accessible.",
+                "health": "/api/v1/health",
+            }
+        ), 200
+
     @app.route("/health", methods=["GET"])
     @app.route("/api/health", methods=["GET"])
     @app.route("/api/v1/health", methods=["GET"])

@@ -1,3 +1,4 @@
+// Candidate Verification & Lifecycle Tracking Page
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GlassCard } from '@/components/GlassCard';
@@ -12,8 +13,10 @@ import {
 import { useCurrentUser } from '@/features/auth/hooks/useAuth';
 import { VerificationStatusBadge } from '../components/VerificationStatusBadge';
 import { VerificationProgressBar } from '../components/VerificationProgressBar';
-import { BulkCandidateActionResponse } from '../types';
+import { BulkCandidateActionResponse, VerificationApplication } from '../types';
 import { useDownloadCandidatesReport } from '@/features/candidates/hooks/useCandidates';
+import { MarkJoinedModal } from '../components/MarkJoinedModal';
+import { EditCandidateDetailsModal } from '../components/EditCandidateDetailsModal';
 import {
   FileCheck2,
   Search,
@@ -31,7 +34,46 @@ import {
   UserCheck,
   Download,
   Loader2,
+  Edit,
+  Send,
+  Briefcase,
+  FileText,
 } from 'lucide-react';
+
+type TrackingTab = 'all' | 'approved' | 'offer_released' | 'joined';
+
+// Safe date and time formatters to prevent runtime Invalid Date errors
+const formatDate = (val?: string | null): string => {
+  if (!val) return '—';
+  try {
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return val;
+    return d.toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return val;
+  }
+};
+
+const formatDateTime = (val?: string | null): string => {
+  if (!val) return '—';
+  try {
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return val;
+    return d.toLocaleString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return val;
+  }
+};
 
 export const DocumentVerificationListPage: React.FC = () => {
   const navigate = useNavigate();
@@ -44,7 +86,24 @@ export const DocumentVerificationListPage: React.FC = () => {
   const isAdmin = userRoles.includes('admin') || permissions.includes('users:manage');
   const canApprove = permissions.includes('candidates:approve') || isAdmin;
   const canReject = permissions.includes('candidates:reject') || isAdmin;
+  const isStaff =
+    userRoles.some((r) => ['admin', 'reviewer', 'officer', 'hr'].includes(r.toLowerCase())) ||
+    permissions.some((p) =>
+      ['candidates:approve', 'documents:verify', 'candidates:review', 'users:manage'].includes(p)
+    );
+  const canEditCandidate = isStaff || isAdmin;
+  const canUpdateJoining = isStaff || canApprove || isAdmin;
 
+  // Tabs state
+  const [activeTab, setActiveTab] = useState<TrackingTab>('all');
+
+  // Modals state
+  const [joiningModalCandidate, setJoiningModalCandidate] = useState<VerificationApplication | null>(null);
+  const [isJoiningModalOpen, setIsJoiningModalOpen] = useState(false);
+  const [editModalCandidate, setEditModalCandidate] = useState<VerificationApplication | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+  // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedHero, setSelectedHero] = useState<string>('ALL');
   const [selectedRole, setSelectedRole] = useState<string>('ALL');
@@ -64,6 +123,15 @@ export const DocumentVerificationListPage: React.FC = () => {
   const bulkRejectMutation = useBulkRejectApplications();
   const downloadReportMutation = useDownloadCandidatesReport();
 
+  // Tab change handler that safely clears selections & resets conflicting filters
+  const handleTabChange = (tab: TrackingTab) => {
+    setActiveTab(tab);
+    setSelectedAppIds(new Set());
+    if (tab !== 'all') {
+      setSelectedStatus('ALL');
+    }
+  };
+
   // Calculate summary counts from genuine backend records
   const stats = useMemo(() => {
     const total = applications.length;
@@ -75,9 +143,44 @@ export const DocumentVerificationListPage: React.FC = () => {
     return { total, pending, inProgress, complete };
   }, [applications]);
 
+  // Tab counts
+  const tabCounts = useMemo(() => {
+    const approved = applications.filter((a) => a.status === 'APPROVED').length;
+    const offerReleased = applications.filter(
+      (a) =>
+        a.offer_letter_status === 'RELEASED' ||
+        a.offer_letter_status === 'SENT' ||
+        a.offer_letter_status === 'ACCEPTED' ||
+        Boolean(a.offer_letter_released_at)
+    ).length;
+    const joined = applications.filter((a) => a.site_joining_status === 'JOINED').length;
+    return {
+      all: applications.length,
+      approved,
+      offerReleased,
+      joined,
+    };
+  }, [applications]);
+
   // Filter applications
   const filteredApplications = useMemo(() => {
     return applications.filter((app) => {
+      // Tab Filter
+      if (activeTab === 'approved' && app.status !== 'APPROVED') {
+        return false;
+      }
+      if (activeTab === 'offer_released') {
+        const isReleased =
+          app.offer_letter_status === 'RELEASED' ||
+          app.offer_letter_status === 'SENT' ||
+          app.offer_letter_status === 'ACCEPTED' ||
+          Boolean(app.offer_letter_released_at);
+        if (!isReleased) return false;
+      }
+      if (activeTab === 'joined' && app.site_joining_status !== 'JOINED') {
+        return false;
+      }
+
       // Search matching (Candidate name or Application Reference)
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase().trim();
@@ -96,8 +199,8 @@ export const DocumentVerificationListPage: React.FC = () => {
         return false;
       }
 
-      // Status Filter
-      if (selectedStatus !== 'ALL') {
+      // Status Filter (Only apply status filter dropdown when on 'all' tab)
+      if (activeTab === 'all' && selectedStatus !== 'ALL') {
         const normStatus = (app.status || '').toUpperCase();
         if (selectedStatus === 'PENDING_VERIFICATION') {
           if (normStatus !== 'PENDING_VERIFICATION' && normStatus !== 'SUBMITTED') return false;
@@ -108,7 +211,7 @@ export const DocumentVerificationListPage: React.FC = () => {
 
       return true;
     });
-  }, [applications, searchQuery, selectedHero, selectedRole, selectedStatus]);
+  }, [applications, activeTab, searchQuery, selectedHero, selectedRole, selectedStatus]);
 
   // Selected applications objects
   const selectedApps = useMemo(() => {
@@ -220,17 +323,18 @@ export const DocumentVerificationListPage: React.FC = () => {
             Candidate Verification
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Review candidate submitted details, verify identity credentials, and record verification decisions.
+            Review candidate submitted details, track approvals, offer letter release, and confirm on-site joining.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <GlassButton
             variant="secondary"
             size="sm"
-            onClick={() => downloadReportMutation.mutate({
-              candidate_name: searchQuery || undefined,
-              status: selectedStatus !== 'ALL' ? selectedStatus : undefined,
-            })}
+            onClick={() =>
+              downloadReportMutation.mutate({
+                candidate_name: searchQuery || undefined,
+              })
+            }
             disabled={downloadReportMutation.isPending}
             leftIcon={
               downloadReportMutation.isPending ? (
@@ -247,7 +351,13 @@ export const DocumentVerificationListPage: React.FC = () => {
 
       {/* Summary Metrics Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        <GlassCard className="p-4 border-slate-200">
+        <GlassCard
+          onClick={() => {
+            handleTabChange('all');
+            setSelectedStatus('ALL');
+          }}
+          className="p-4 border-slate-200 cursor-pointer hover:border-indigo-300 transition-colors"
+        >
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500">Total Applications</span>
             <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center">
@@ -258,7 +368,13 @@ export const DocumentVerificationListPage: React.FC = () => {
           <p className="text-[11px] text-slate-400 mt-1">Submitted in database</p>
         </GlassCard>
 
-        <GlassCard className="p-4 border-slate-200">
+        <GlassCard
+          onClick={() => {
+            handleTabChange('all');
+            setSelectedStatus('PENDING_VERIFICATION');
+          }}
+          className="p-4 border-slate-200 cursor-pointer hover:border-amber-300 transition-colors"
+        >
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500">Pending Review</span>
             <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center">
@@ -269,7 +385,13 @@ export const DocumentVerificationListPage: React.FC = () => {
           <p className="text-[11px] text-slate-400 mt-1">Awaiting review</p>
         </GlassCard>
 
-        <GlassCard className="p-4 border-slate-200">
+        <GlassCard
+          onClick={() => {
+            handleTabChange('all');
+            setSelectedStatus('IN_PROGRESS');
+          }}
+          className="p-4 border-slate-200 cursor-pointer hover:border-sky-300 transition-colors"
+        >
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500">In Progress</span>
             <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-700 flex items-center justify-center">
@@ -280,7 +402,13 @@ export const DocumentVerificationListPage: React.FC = () => {
           <p className="text-[11px] text-slate-400 mt-1">Partially verified</p>
         </GlassCard>
 
-        <GlassCard className="p-4 border-slate-200">
+        <GlassCard
+          onClick={() => {
+            handleTabChange('all');
+            setSelectedStatus('VERIFICATION_COMPLETE');
+          }}
+          className="p-4 border-slate-200 cursor-pointer hover:border-emerald-300 transition-colors"
+        >
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500">Completed</span>
             <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
@@ -290,6 +418,95 @@ export const DocumentVerificationListPage: React.FC = () => {
           <div className="text-2xl font-black text-emerald-700 mt-2">{stats.complete}</div>
           <p className="text-[11px] text-slate-400 mt-1">100% verified records</p>
         </GlassCard>
+      </div>
+
+      {/* Candidate Tracking Tabs */}
+      <div className="border-b border-slate-200 flex items-center gap-2 overflow-x-auto pb-0.5">
+        <button
+          type="button"
+          onClick={() => handleTabChange('all')}
+          className={`flex items-center gap-2 pb-3 px-3 text-xs font-bold border-b-2 transition-colors whitespace-nowrap ${
+            activeTab === 'all'
+              ? 'border-indigo-600 text-indigo-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          <span>All Applications</span>
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeTab === 'all' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {tabCounts.all}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTabChange('approved')}
+          className={`flex items-center gap-2 pb-3 px-3 text-xs font-bold border-b-2 transition-colors whitespace-nowrap ${
+            activeTab === 'approved'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+          <span>Approved</span>
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeTab === 'approved'
+                ? 'bg-emerald-100 text-emerald-800 font-bold'
+                : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {tabCounts.approved}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTabChange('offer_released')}
+          className={`flex items-center gap-2 pb-3 px-3 text-xs font-bold border-b-2 transition-colors whitespace-nowrap ${
+            activeTab === 'offer_released'
+              ? 'border-blue-600 text-blue-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Send className="w-4 h-4 text-blue-600" />
+          <span>Offer Letter Released</span>
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeTab === 'offer_released'
+                ? 'bg-blue-100 text-blue-800 font-bold'
+                : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {tabCounts.offerReleased}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTabChange('joined')}
+          className={`flex items-center gap-2 pb-3 px-3 text-xs font-bold border-b-2 transition-colors whitespace-nowrap ${
+            activeTab === 'joined'
+              ? 'border-purple-600 text-purple-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Briefcase className="w-4 h-4 text-purple-600" />
+          <span>Joined On Site</span>
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeTab === 'joined'
+                ? 'bg-purple-100 text-purple-800 font-bold'
+                : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {tabCounts.joined}
+          </span>
+        </button>
       </div>
 
       {/* Filter and Search Bar */}
@@ -334,23 +551,27 @@ export const DocumentVerificationListPage: React.FC = () => {
             </select>
           </div>
 
-          {/* Verification Status Filter */}
-          <div className="w-full md:w-48">
-            <select
-              value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
-              className="w-full text-xs px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 font-medium"
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="PENDING_VERIFICATION">Pending Verification</option>
-              <option value="IN_PROGRESS">In Progress</option>
-              <option value="VERIFICATION_COMPLETE">Verification Complete</option>
-            </select>
-          </div>
+          {/* Verification Status Filter (Available in All Applications tab) */}
+          {activeTab === 'all' && (
+            <div className="w-full md:w-48">
+              <select
+                value={selectedStatus}
+                onChange={(e) => setSelectedStatus(e.target.value)}
+                className="w-full text-xs px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 font-medium"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="PENDING_VERIFICATION">Pending Verification</option>
+                <option value="IN_PROGRESS">In Progress</option>
+                <option value="VERIFICATION_COMPLETE">Verification Complete</option>
+                <option value="APPROVED">Approved</option>
+                <option value="REJECTED">Rejected</option>
+              </select>
+            </div>
+          )}
         </div>
 
         {/* Active Filter Clear Tag */}
-        {(searchQuery || selectedHero !== 'ALL' || selectedRole !== 'ALL' || selectedStatus !== 'ALL') && (
+        {(searchQuery || selectedHero !== 'ALL' || selectedRole !== 'ALL' || (activeTab === 'all' && selectedStatus !== 'ALL')) && (
           <div className="flex items-center gap-2 pt-1">
             <span className="text-[11px] text-slate-500">
               Showing {filteredApplications.length} of {applications.length} results
@@ -389,8 +610,8 @@ export const DocumentVerificationListPage: React.FC = () => {
         </div>
       )}
 
-      {/* Bulk Action Sticky/Floating Toolbar */}
-      {selectedAppIds.size > 0 && (
+      {/* Bulk Action Sticky Toolbar */}
+      {selectedAppIds.size > 0 && activeTab === 'all' && (
         <div className="sticky top-4 z-20 bg-white border border-indigo-200 rounded-2xl p-3 px-4 flex flex-wrap items-center justify-between gap-3 shadow-lg animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center gap-3">
             <span className="font-bold text-xs text-indigo-900 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg">
@@ -442,33 +663,50 @@ export const DocumentVerificationListPage: React.FC = () => {
       ) : applications.length === 0 ? (
         <EmptyState
           icon={<FileCheck2 className="w-8 h-8 text-indigo-600" />}
-          title="No Applications Pending Verification"
-          description="There are currently no candidate applications recorded in the database. When candidate applications are submitted, they will automatically appear here for verification."
+          title="No Applications Recorded"
+          description="There are currently no candidate applications recorded in the database. When candidate applications are submitted, they will automatically appear here."
         />
       ) : filteredApplications.length === 0 ? (
         <EmptyState
           icon={<Search className="w-8 h-8 text-slate-400" />}
-          title="No Matching Applications Found"
-          description="No candidate records match your selected search query or filter criteria. Try clearing filters to see all applications."
+          title={`No Candidates in "${
+            activeTab === 'approved'
+              ? 'Approved'
+              : activeTab === 'offer_released'
+              ? 'Offer Letter Released'
+              : activeTab === 'joined'
+              ? 'Joined On Site'
+              : 'Current Filter'
+          }"`}
+          description={
+            activeTab === 'joined'
+              ? 'No candidates have been marked as joined on site yet. Authorized users can mark candidates as joined from the Approved or Offer Letter Released tabs.'
+              : activeTab === 'offer_released'
+              ? 'No candidates have active offer letters generated and released yet. Generate and release offer letters in the Candidate Workspace to see them here.'
+              : activeTab === 'approved'
+              ? 'No candidates currently have an APPROVED status. Approve candidates from the verification queue.'
+              : 'No candidate records match your search query or filter criteria. Try clearing filters to see all applications.'
+          }
           action={
             <GlassButton
               variant="secondary"
               size="sm"
               onClick={() => {
+                handleTabChange('all');
                 setSearchQuery('');
                 setSelectedHero('ALL');
                 setSelectedRole('ALL');
                 setSelectedStatus('ALL');
               }}
             >
-              Clear Filters
+              Show All Applications
             </GlassButton>
           }
         />
       ) : (
         <div className="space-y-3">
           {/* List Scope & Select All Control */}
-          {(canApprove || canReject) && (
+          {(canApprove || canReject) && activeTab === 'all' && (
             <div className="flex items-center justify-between px-2 text-xs text-slate-500">
               <label className="flex items-center gap-2 cursor-pointer select-none font-semibold text-slate-700">
                 <input
@@ -484,13 +722,13 @@ export const DocumentVerificationListPage: React.FC = () => {
           )}
 
           {filteredApplications.map((app) => {
-            const formattedDate = new Date(app.created_at).toLocaleDateString('en-IN', {
-              day: 'numeric',
-              month: 'short',
-              year: 'numeric',
-            });
-
             const isSelected = selectedAppIds.has(app.id);
+            const isOfferReleased =
+              app.offer_letter_status === 'RELEASED' ||
+              app.offer_letter_status === 'SENT' ||
+              app.offer_letter_status === 'ACCEPTED' ||
+              Boolean(app.offer_letter_released_at);
+            const isJoined = app.site_joining_status === 'JOINED';
 
             return (
               <GlassCard
@@ -500,9 +738,9 @@ export const DocumentVerificationListPage: React.FC = () => {
                 }`}
               >
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                  {/* Left Column: Selection Checkbox + Reference & Candidate Info */}
+                  {/* Left Column: Selection Checkbox + Reference & Details */}
                   <div className="flex items-start gap-3 flex-1 min-w-0">
-                    {(canApprove || canReject) && (
+                    {(canApprove || canReject) && activeTab === 'all' && (
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -513,6 +751,7 @@ export const DocumentVerificationListPage: React.FC = () => {
                     )}
 
                     <div className="space-y-2 flex-1 min-w-0">
+                      {/* Status Badges Row */}
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono text-xs font-bold text-indigo-900 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
                           {app.application_number}
@@ -521,8 +760,46 @@ export const DocumentVerificationListPage: React.FC = () => {
                         <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
                           {app.hero_category} • {app.role_applied}
                         </span>
+
+                        {/* Offer Letter Status Badge */}
+                        {isOfferReleased ? (
+                          <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Send className="w-3 h-3 text-blue-600" />
+                            Offer Released
+                          </span>
+                        ) : app.offer_letter_status === 'DRAFT' ? (
+                          <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <FileText className="w-3 h-3 text-amber-600" />
+                            Offer Draft
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-medium text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-full">
+                            Offer Not Released
+                          </span>
+                        )}
+
+                        {/* Site Joining Badge */}
+                        {isJoined ? (
+                          <span className="text-[10px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Briefcase className="w-3 h-3 text-purple-600" />
+                            Joined On Site
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-medium text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-full">
+                            Joining Pending
+                          </span>
+                        )}
+
+                        {/* Enrollment Completion Rule Badge */}
+                        {isJoined && (
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            Enrollment Completed
+                          </span>
+                        )}
                       </div>
 
+                      {/* General Candidate Details */}
                       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
                         <div className="flex items-center gap-1.5 font-bold text-slate-900">
                           <User className="w-3.5 h-3.5 text-slate-400" />
@@ -533,30 +810,150 @@ export const DocumentVerificationListPage: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-1 text-slate-500">
                           <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Submitted on {formattedDate}</span>
+                          <span>Submitted on {formatDate(app.created_at)}</span>
                         </div>
                         <div className="flex items-center gap-1 text-slate-500">
                           <UserCheck className="w-3.5 h-3.5 text-indigo-500" />
                           <span>Created by: <strong className="text-slate-700 font-semibold">{app.created_by_name || '—'}</strong></span>
                         </div>
                       </div>
+
+                      {/* Tab 1: Approved - Tracking Details */}
+                      {activeTab === 'approved' && (
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600 pt-1.5 border-t border-slate-100">
+                          <div>
+                            <span className="text-slate-400">Approval Status: </span>
+                            <strong className="text-emerald-700 font-bold">APPROVED</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Offer Letter Status: </span>
+                            <strong className={isOfferReleased ? 'text-blue-700 font-bold' : 'text-slate-700 font-medium'}>
+                              {isOfferReleased ? 'Released / Sent' : app.offer_letter_status === 'DRAFT' ? 'Draft Created' : 'Not Generated'}
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Site Joining Status: </span>
+                            <strong className={isJoined ? 'text-purple-700 font-bold' : 'text-slate-700 font-medium'}>
+                              {isJoined ? `Joined (${app.site_joining_date || 'Yes'})` : 'Pending'}
+                            </strong>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tab 2: Offer Letter Released - Tracking Details */}
+                      {activeTab === 'offer_released' && (
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600 pt-1.5 border-t border-slate-100">
+                          <div>
+                            <span className="text-slate-400">Approval Date: </span>
+                            <strong className="text-slate-800 font-medium">{formatDate(app.reviewed_at) || 'Approved'}</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Offer Status: </span>
+                            <strong className="text-blue-700 font-bold">{app.offer_letter_status || 'RELEASED'}</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Release Date & Time: </span>
+                            <strong className="text-slate-800 font-medium">{formatDateTime(app.offer_letter_released_at) || 'Released'}</strong>
+                          </div>
+                          {app.offer_letter_released_by_name && (
+                            <div>
+                              <span className="text-slate-400">Released By: </span>
+                              <strong className="text-slate-800 font-medium">{app.offer_letter_released_by_name}</strong>
+                            </div>
+                          )}
+                          <div>
+                            <span className="text-slate-400">Site Joining: </span>
+                            <strong className={isJoined ? 'text-purple-700 font-bold' : 'text-slate-700 font-medium'}>
+                              {isJoined ? `Joined (${app.site_joining_date || 'Yes'})` : 'Pending On-Site Arrival'}
+                            </strong>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tab 3: Joined On Site - Tracking Details */}
+                      {activeTab === 'joined' && (
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600 pt-1.5 border-t border-slate-100">
+                          <div>
+                            <span className="text-slate-400">Designation / Role: </span>
+                            <strong className="text-slate-900 font-bold">{app.role_applied || '—'}</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Site Joining Status: </span>
+                            <strong className="text-purple-700 font-bold">Joined</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Joining Date: </span>
+                            <strong className="text-purple-700 font-bold">{app.site_joining_date || 'Recorded'}</strong>
+                          </div>
+                          {app.site_joining_updated_by_name && (
+                            <div>
+                              <span className="text-slate-400">Confirmed By: </span>
+                              <strong className="text-slate-800 font-medium">{app.site_joining_updated_by_name}</strong>
+                            </div>
+                          )}
+                          {app.site_joining_updated_at && (
+                            <div>
+                              <span className="text-slate-400">Recorded At: </span>
+                              <strong className="text-slate-800 font-medium">{formatDateTime(app.site_joining_updated_at)}</strong>
+                            </div>
+                          )}
+                          {app.site_joining_notes && (
+                            <div className="italic text-slate-500 w-full">
+                              Notes: "{app.site_joining_notes}"
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Middle Column: Verification Progress */}
-                  <div className="w-full lg:w-64 space-y-1">
-                    <VerificationProgressBar progress={app.verification_progress} />
-                  </div>
+                  {/* Middle Column: Verification Progress (for All tab) */}
+                  {activeTab === 'all' && (
+                    <div className="w-full lg:w-56 space-y-1">
+                      <VerificationProgressBar progress={app.verification_progress} />
+                    </div>
+                  )}
 
-                  {/* Right Column: Open Workspace Action */}
-                  <div className="flex-shrink-0 flex items-center justify-end">
+                  {/* Right Column: Actions */}
+                  <div className="flex-shrink-0 flex flex-wrap items-center justify-end gap-2">
+                    {/* Edit Details Action (Approved Tab) */}
+                    {activeTab === 'approved' && canEditCandidate && (
+                      <GlassButton
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          setEditModalCandidate(app);
+                          setIsEditModalOpen(true);
+                        }}
+                        leftIcon={<Edit className="w-3.5 h-3.5 text-indigo-600" />}
+                      >
+                        Edit Details
+                      </GlassButton>
+                    )}
+
+                    {/* Site Joining Action */}
+                    {canUpdateJoining && (
+                      <GlassButton
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          setJoiningModalCandidate(app);
+                          setIsJoiningModalOpen(true);
+                        }}
+                        leftIcon={<Briefcase className="w-3.5 h-3.5 text-emerald-600" />}
+                      >
+                        {isJoined ? 'Update Joining' : 'Mark as Joined'}
+                      </GlassButton>
+                    )}
+
+                    {/* Open Workspace Action */}
                     <GlassButton
                       variant="primary"
                       size="sm"
                       onClick={() => navigate(`/documents/${app.id}`)}
                       rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
                     >
-                      Open Verification Workspace
+                      {activeTab === 'all' ? 'Open Verification Workspace' : 'Workspace'}
                     </GlassButton>
                   </div>
                 </div>
@@ -855,6 +1252,38 @@ export const DocumentVerificationListPage: React.FC = () => {
           )}
         </div>
       </Modal>
+
+      {/* Mark / Update Site Joining Modal */}
+      <MarkJoinedModal
+        isOpen={isJoiningModalOpen}
+        onClose={() => {
+          setIsJoiningModalOpen(false);
+          setJoiningModalCandidate(null);
+        }}
+        candidate={joiningModalCandidate}
+        onSuccess={() => {
+          setFeedbackMessage({
+            type: 'success',
+            text: `Successfully updated site joining status for ${joiningModalCandidate?.full_name}.`,
+          });
+        }}
+      />
+
+      {/* Edit Candidate Details Modal */}
+      <EditCandidateDetailsModal
+        isOpen={isEditModalOpen}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          setEditModalCandidate(null);
+        }}
+        candidate={editModalCandidate}
+        onSuccess={() => {
+          setFeedbackMessage({
+            type: 'success',
+            text: `Successfully updated details for candidate ${editModalCandidate?.full_name}.`,
+          });
+        }}
+      />
     </div>
   );
 };

@@ -143,3 +143,32 @@ export const useBulkRejectApplications = () => {
   });
 };
 
+export const useUpdateJoiningStatus = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      applicationId,
+      status,
+      joining_date,
+      notes,
+    }: {
+      applicationId: string;
+      status: 'JOINED' | 'NOT_JOINED' | 'PENDING';
+      joining_date?: string;
+      notes?: string;
+    }) =>
+      verificationService.updateJoiningStatus(applicationId, {
+        status,
+        joining_date,
+        notes,
+      }),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: VERIFICATION_LIST_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ['application-detail', variables.applicationId] });
+      queryClient.invalidateQueries({ queryKey: ['my-applications'] });
+      queryClient.invalidateQueries({ queryKey: ['candidate-letters', variables.applicationId] });
+    },
+  });
+};
+

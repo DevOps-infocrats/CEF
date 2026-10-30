@@ -164,6 +164,24 @@ export const verificationService = {
   },
 
   /**
+   * Manually update candidate site-joining status and date.
+   */
+  updateJoiningStatus: async (
+    applicationId: string,
+    data: {
+      status: 'JOINED' | 'NOT_JOINED' | 'PENDING';
+      joining_date?: string;
+      notes?: string;
+    }
+  ): Promise<VerificationApplication> => {
+    const response = await apiClient.post<ApiResponse<VerificationApplication>>(
+      `/applications/${applicationId}/joining-status`,
+      data
+    );
+    return response.data.data;
+  },
+
+  /**
    * Get secure download/stream URL for an attached document.
    */
   getDocumentUrl: (documentId: string): string => {

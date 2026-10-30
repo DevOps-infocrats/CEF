@@ -1,5 +1,6 @@
 import logging
-from flask import Flask
+import os
+from flask import Flask, request, send_file
 from marshmallow import ValidationError as MarshmallowValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import HTTPException
@@ -7,6 +8,28 @@ from app.common.errors.exceptions import AppException
 from app.common.responses import error_response
 
 logger = logging.getLogger(__name__)
+
+# Common static asset extensions to prevent serving index.html for missing asset files
+STATIC_ASSET_EXTENSIONS = {
+    ".js",
+    ".css",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".ico",
+    ".webp",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".map",
+    ".json",
+    ".txt",
+    ".pdf",
+    ".docx",
+}
 
 
 def register_error_handlers(app: Flask) -> None:
@@ -36,20 +59,19 @@ def register_error_handlers(app: Flask) -> None:
         error_code = e.name.upper().replace(" ", "_")
 
         # Fallback for SPA frontend client-side routing if requested directly from backend
-        if code == 404:
-            from flask import request
-            if not request.path.startswith("/api") and request.accept_mimetypes.accept_html:
-                import os
-                from flask import send_file
-                candidate_paths = [
-                    os.path.abspath(os.path.join(app.root_path, "..", "..", "frontend", "dist", "index.html")),
-                    os.path.abspath(os.path.join(app.root_path, "..", "frontend", "dist", "index.html")),
-                    os.path.abspath(os.path.join(app.root_path, "static", "index.html")),
-                    "/usr/share/nginx/html/index.html",
-                ]
-                for p in candidate_paths:
-                    if os.path.isfile(p):
-                        return send_file(p)
+        if code == 404 and request.method in ("GET", "HEAD"):
+            if not request.path.startswith("/api"):
+                _, ext = os.path.splitext(request.path)
+                if ext.lower() not in STATIC_ASSET_EXTENSIONS:
+                    candidate_paths = [
+                        os.path.abspath(os.path.join(app.root_path, "..", "..", "frontend", "dist", "index.html")),
+                        os.path.abspath(os.path.join(app.root_path, "..", "frontend", "dist", "index.html")),
+                        os.path.abspath(os.path.join(app.root_path, "static", "index.html")),
+                        "/usr/share/nginx/html/index.html",
+                    ]
+                    for p in candidate_paths:
+                        if os.path.isfile(p):
+                            return send_file(p, mimetype="text/html")
 
         return error_response(
             message=e.description or "HTTP error occurred",

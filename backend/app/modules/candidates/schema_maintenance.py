@@ -73,6 +73,11 @@ def ensure_candidate_schema(force: bool = False) -> None:
                 ("current_salary", "NUMERIC(12, 2)", "NUMERIC(12, 2)"),
                 ("asking_salary", "NUMERIC(12, 2)", "NUMERIC(12, 2)"),
                 ("negotiated_salary", "NUMERIC(12, 2)", "NUMERIC(12, 2)"),
+                ("site_joining_status", "VARCHAR(50) DEFAULT 'NOT_JOINED'", "VARCHAR(50) DEFAULT 'NOT_JOINED'"),
+                ("site_joining_date", "VARCHAR(50)", "VARCHAR(50)"),
+                ("site_joining_updated_by_id", "UUID", "CHAR(32)"),
+                ("site_joining_updated_at", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
+                ("site_joining_notes", "VARCHAR(500)", "VARCHAR(500)"),
             ]
             for col_name, pg_type, sqlite_type in columns_to_ensure:
                 if col_name not in columns:

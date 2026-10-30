@@ -495,6 +495,7 @@ class CandidateService:
                 "permanent_state", "permanent_pincode", "permanent_country",
                 "account_holder_name", "bank_name", "account_number", "ifsc_code",
                 "branch_name", "circle", "current_salary", "asking_salary", "negotiated_salary",
+                "joining_date",
             ]
             for key in field_keys:
                 if key in data:
@@ -1478,17 +1479,69 @@ class CandidateService:
         return application
 
     @staticmethod
+    def update_joining_status(
+        application: CandidateApplication,
+        status: str,
+        joining_date: Optional[str] = None,
+        notes: Optional[str] = None,
+        user: Any = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> CandidateApplication:
+        """Manually update or mark candidate's site-joining status and record audit log."""
+        from app.modules.candidates.models import VALID_JOINING_STATUSES
+        if status not in VALID_JOINING_STATUSES:
+            raise ValidationError(
+                f"Invalid joining status: '{status}'. Must be one of: {list(VALID_JOINING_STATUSES)}"
+            )
+
+        old_status = application.site_joining_status or "NOT_JOINED"
+        old_joining_date = application.site_joining_date or application.joining_date
+
+        with atomic():
+            application.site_joining_status = status
+            if joining_date is not None:
+                cleaned_date = _clean_str(joining_date)
+                application.site_joining_date = cleaned_date
+                # Synchronize with application.joining_date if supplied
+                if cleaned_date:
+                    application.joining_date = cleaned_date
+
+            if notes is not None:
+                application.site_joining_notes = _clean_str(notes)
+
+            if user:
+                application.site_joining_updated_by_id = user.id
+            application.site_joining_updated_at = datetime.now(timezone.utc)
+
+            audit = AuditLog(
+                user_id=user.id if user else None,
+                action="CANDIDATE_SITE_JOINING_UPDATED",
+                resource="CandidateApplication",
+                resource_id=str(application.id),
+                ip_address=ip_address,
+                user_agent=user_agent,
+                details={
+                    "application_number": application.application_number,
+                    "candidate_name": application.full_name,
+                    "previous_status": old_status,
+                    "new_status": status,
+                    "previous_joining_date": old_joining_date,
+                    "new_joining_date": application.site_joining_date,
+                    "notes": application.site_joining_notes,
+                },
+            )
+            db.session.add(audit)
+
+        return application
+
+    @staticmethod
     def generate_candidates_excel_report(
         applications: List[CandidateApplication],
         current_user: Optional[Any] = None,
     ) -> io.BytesIO:
-        """Generate a professionally styled Excel report matching the required columns and timezone."""
+        """Generate a professionally styled Excel report with dedicated tracking worksheets."""
         wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Candidate Applications"
-
-        # Ensure gridlines are visible
-        ws.views.sheetView[0].showGridLines = True
 
         # Check authorization to view unmasked sensitive fields (Aadhaar, PAN, Bank Details)
         can_view_sensitive = True
@@ -1504,57 +1557,7 @@ class CandidateService:
                 or "officer" in getattr(current_user, "role_names", [])
             )
 
-        headers = [
-            # 1-7: Original 7 columns preserved in exact order
-            "Candidate Application ID",
-            "Candidate Name",
-            "HR / Creator Name",
-            "Creation Date",
-            "Creation Time",
-            "Current Candidate Status",
-            "Candidate Designation / Role",
-            # 8-45: All remaining available candidate details
-            "Hero Category",
-            "Mobile Number",
-            "Email Address",
-            "Aadhaar Number",
-            "PAN Number",
-            "Current Address Line 1",
-            "Current Address Line 2",
-            "Current City",
-            "Current State",
-            "Current Pincode",
-            "Current Country",
-            "Permanent Address Same as Current",
-            "Permanent Address Line 1",
-            "Permanent Address Line 2",
-            "Permanent City",
-            "Permanent State",
-            "Permanent Pincode",
-            "Permanent Country",
-            "Account Holder Name",
-            "Bank Name",
-            "Account Number",
-            "IFSC Code",
-            "Branch Name",
-            "Circle",
-            "District",
-            "Block",
-            "Current Salary",
-            "Asking Salary",
-            "Negotiated Salary",
-            "Joining Date",
-            "Uploaded Documents",
-            "Document Verification Status",
-            "Reviewed By",
-            "Reviewed At",
-            "Rejection Reason",
-            "Offer Acceptance Status",
-            "Offer Accepted At",
-            "Offer Accepted By",
-        ]
-
-        # Header styling: Dark slate fill, bold white text, centered
+        # Common styles
         header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
         header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
         header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -1571,27 +1574,14 @@ class CandidateService:
             top=thin_border_side,
             bottom=thin_border_side,
         )
-
-        ws.append(headers)
-        ws.row_dimensions[1].height = 28
-
-        for col_idx in range(1, len(headers) + 1):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = header_alignment
-            cell.border = cell_border
-
         alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
 
-        # Set of column indexes (1-based) that should be center-aligned or right-aligned
-        center_col_indices = {1, 4, 5, 6, 8, 9, 11, 12, 17, 19, 24, 29, 37, 41, 43, 44}
-        right_col_indices = {34, 35, 36}
+        def _format_cell_value(val: Any) -> str:
+            if val is None:
+                return ""
+            return str(val)
 
-        for row_idx, app in enumerate(applications, start=2):
-            ws.row_dimensions[row_idx].height = 22
-            is_alt = (row_idx % 2 == 1)
-
+        def _get_app_fields(app: CandidateApplication):
             # 1. Application ID
             app_id = app.application_number or ""
 
@@ -1624,9 +1614,11 @@ class CandidateService:
                 local_dt = created_at.astimezone(REPORT_TIMEZONE)
                 creation_date = local_dt.strftime("%Y-%m-%d")
                 creation_time = local_dt.strftime("%H:%M:%S")
+                creation_datetime = local_dt.strftime("%Y-%m-%d %H:%M:%S")
             else:
                 creation_date = ""
                 creation_time = ""
+                creation_datetime = ""
 
             # 6. Status
             status = app.status or ""
@@ -1634,30 +1626,99 @@ class CandidateService:
             # 7. Designation / Role
             designation = app.role_applied or ""
 
-            # 8. Hero Category
+            # Approval Status & Datetime
+            approval_status = "Approved" if app.status == "APPROVED" else (app.status or "")
+            rev_dt = getattr(app, "reviewed_at", None)
+            if rev_dt:
+                if rev_dt.tzinfo is None:
+                    rev_dt = rev_dt.replace(tzinfo=timezone.utc)
+                approval_datetime = rev_dt.astimezone(REPORT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                approval_datetime = ""
+
+            # Offer Letter Details
+            letters = getattr(app, "letters", None) or []
+            offer_letter = next((l for l in letters if l.letter_type == "offer_letter"), None)
+            if offer_letter:
+                if offer_letter.status in ("SENT", "ACCEPTED") or offer_letter.sent_at is not None:
+                    offer_letter_status = "Released" if offer_letter.status == "SENT" else offer_letter.status
+                    if offer_letter.sent_at:
+                        s_dt = offer_letter.sent_at
+                        if s_dt.tzinfo is None:
+                            s_dt = s_dt.replace(tzinfo=timezone.utc)
+                        offer_letter_release_datetime = s_dt.astimezone(REPORT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        offer_letter_release_datetime = ""
+                else:
+                    offer_letter_status = offer_letter.status or "Draft"
+                    offer_letter_release_datetime = ""
+            else:
+                offer_letter_status = "Not Generated"
+                offer_letter_release_datetime = ""
+
+            # Site Joining Details
+            site_joining_status = getattr(app, "site_joining_status", None) or "NOT_JOINED"
+            site_joining_date = getattr(app, "site_joining_date", None) or getattr(app, "joining_date", None) or ""
+
+            # Last Updated By & Datetime
+            if getattr(app, "site_joining_updated_by", None):
+                last_updated_by = (
+                    app.site_joining_updated_by.full_name
+                    or app.site_joining_updated_by.username
+                    or app.site_joining_updated_by.email
+                    or ""
+                )
+            elif getattr(app, "site_joining_updated_by_id", None):
+                from app.modules.auth.models import User
+                up_user = db.session.get(User, app.site_joining_updated_by_id)
+                last_updated_by = up_user.full_name or up_user.username or up_user.email if up_user else ""
+            elif getattr(app, "reviewed_by", None):
+                last_updated_by = (
+                    app.reviewed_by.full_name
+                    or app.reviewed_by.username
+                    or app.reviewed_by.email
+                    or ""
+                )
+            elif getattr(app, "created_by", None):
+                last_updated_by = (
+                    app.created_by.full_name
+                    or app.created_by.username
+                    or app.created_by.email
+                    or ""
+                )
+            else:
+                last_updated_by = ""
+
+            up_dt = (
+                getattr(app, "site_joining_updated_at", None)
+                or getattr(app, "updated_at", None)
+                or getattr(app, "reviewed_at", None)
+                or getattr(app, "created_at", None)
+            )
+            if up_dt:
+                if up_dt.tzinfo is None:
+                    up_dt = up_dt.replace(tzinfo=timezone.utc)
+                last_updated_datetime = up_dt.astimezone(REPORT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                last_updated_datetime = ""
+
+            # Remaining candidate details
             hero_category = app.hero_category or ""
-
-            # 9. Mobile Number
             mobile = app.mobile_number or ""
-
-            # 10. Email Address
             email = app.email or ""
 
-            # 11. Aadhaar Number
             raw_aadhaar = app.aadhaar_number or ""
             if raw_aadhaar and not can_view_sensitive:
                 aadhaar_val = f"••••••••{raw_aadhaar[-4:]}" if len(raw_aadhaar) >= 4 else raw_aadhaar
             else:
                 aadhaar_val = raw_aadhaar
 
-            # 12. PAN Number
             raw_pan = app.pan_number or ""
             if raw_pan and not can_view_sensitive:
                 pan_val = f"••••••{raw_pan[-4:]}" if len(raw_pan) >= 4 else raw_pan
             else:
                 pan_val = raw_pan
 
-            # 13-18. Current Address
             curr_line1 = app.current_address_line1 or ""
             curr_line2 = app.current_address_line2 or ""
             curr_city = app.current_city or ""
@@ -1665,7 +1726,6 @@ class CandidateService:
             curr_pincode = app.current_pincode or ""
             curr_country = app.current_country or ""
 
-            # 19. Permanent Address Same as Current
             if app.is_permanent_same is True:
                 perm_same_val = "Yes"
             elif app.is_permanent_same is False:
@@ -1673,7 +1733,6 @@ class CandidateService:
             else:
                 perm_same_val = ""
 
-            # 20-25. Permanent Address
             perm_line1 = app.permanent_address_line1 or ""
             perm_line2 = app.permanent_address_line2 or ""
             perm_city = app.permanent_city or ""
@@ -1681,7 +1740,6 @@ class CandidateService:
             perm_pincode = app.permanent_pincode or ""
             perm_country = app.permanent_country or ""
 
-            # 26-30. Bank Details
             acc_holder = app.account_holder_name or ""
             bank_name = app.bank_name or ""
             raw_acc = app.account_number or ""
@@ -1692,7 +1750,6 @@ class CandidateService:
             ifsc_code = app.ifsc_code or ""
             branch_name = app.branch_name or ""
 
-            # 31-33. Location Allocation
             circle = app.circle or ""
             selected_dists = getattr(app, "selected_districts", None)
             if selected_dists:
@@ -1706,15 +1763,11 @@ class CandidateService:
             else:
                 block_val = app.block or ""
 
-            # 34-36. Salary Details
             curr_sal = str(app.current_salary) if app.current_salary is not None else ""
             ask_sal = str(app.asking_salary) if app.asking_salary is not None else ""
             neg_sal = str(app.negotiated_salary) if app.negotiated_salary is not None else ""
-
-            # 37. Joining Date
             joining_date = app.joining_date or ""
 
-            # 38. Uploaded Documents
             docs = getattr(app, "documents", None) or []
             if docs:
                 doc_list = []
@@ -1729,7 +1782,6 @@ class CandidateService:
             else:
                 uploaded_docs_val = ""
 
-            # 39. Document Verification Status
             v_items = getattr(app, "verification_items", None) or []
             if v_items:
                 item_list = [f"{item.item_label or item.item_key}: {item.status}" for item in v_items]
@@ -1737,7 +1789,6 @@ class CandidateService:
             else:
                 verification_val = ""
 
-            # 40-42. Review Information
             if getattr(app, "reviewed_by", None):
                 reviewer_val = (
                     app.reviewed_by.full_name
@@ -1752,17 +1803,8 @@ class CandidateService:
             else:
                 reviewer_val = ""
 
-            rev_dt = getattr(app, "reviewed_at", None)
-            if rev_dt:
-                if rev_dt.tzinfo is None:
-                    rev_dt = rev_dt.replace(tzinfo=timezone.utc)
-                reviewed_at_val = rev_dt.astimezone(REPORT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                reviewed_at_val = ""
-
+            reviewed_at_val = approval_datetime
             rejection_reason = app.rejection_reason or ""
-
-            # 43-45. Offer Acceptance Details
             offer_acceptance_status = app.offer_acceptance_status or ""
 
             acc_dt = getattr(app, "offer_accepted_at", None)
@@ -1787,80 +1829,192 @@ class CandidateService:
             else:
                 acceptor_val = ""
 
-            row_values = [
-                # 1-7 (Original 7 preserved)
-                app_id,
-                cand_name,
-                creator_name,
-                creation_date,
-                creation_time,
-                status,
-                designation,
-                # 8-45 (Additional fields)
-                hero_category,
-                mobile,
-                email,
-                aadhaar_val,
-                pan_val,
-                curr_line1,
-                curr_line2,
-                curr_city,
-                curr_state,
-                curr_pincode,
-                curr_country,
-                perm_same_val,
-                perm_line1,
-                perm_line2,
-                perm_city,
-                perm_state,
-                perm_pincode,
-                perm_country,
-                acc_holder,
-                bank_name,
-                acc_val,
-                ifsc_code,
-                branch_name,
-                circle,
-                district_val,
-                block_val,
-                curr_sal,
-                ask_sal,
-                neg_sal,
-                joining_date,
-                uploaded_docs_val,
-                verification_val,
-                reviewer_val,
-                reviewed_at_val,
-                rejection_reason,
-                offer_acceptance_status,
-                offer_accepted_at_val,
-                acceptor_val,
-            ]
+            return {
+                "app_id": app_id,
+                "cand_name": cand_name,
+                "creator_name": creator_name,
+                "creation_date": creation_date,
+                "creation_time": creation_time,
+                "creation_datetime": creation_datetime,
+                "status": status,
+                "designation": designation,
+                "approval_status": approval_status,
+                "approval_datetime": approval_datetime,
+                "offer_letter_status": offer_letter_status,
+                "offer_letter_release_datetime": offer_letter_release_datetime,
+                "site_joining_status": site_joining_status,
+                "site_joining_date": site_joining_date,
+                "last_updated_by": last_updated_by,
+                "last_updated_datetime": last_updated_datetime,
+                "hero_category": hero_category,
+                "mobile": mobile,
+                "email": email,
+                "aadhaar_val": aadhaar_val,
+                "pan_val": pan_val,
+                "curr_line1": curr_line1,
+                "curr_line2": curr_line2,
+                "curr_city": curr_city,
+                "curr_state": curr_state,
+                "curr_pincode": curr_pincode,
+                "curr_country": curr_country,
+                "perm_same_val": perm_same_val,
+                "perm_line1": perm_line1,
+                "perm_line2": perm_line2,
+                "perm_city": perm_city,
+                "perm_state": perm_state,
+                "perm_pincode": perm_pincode,
+                "perm_country": perm_country,
+                "acc_holder": acc_holder,
+                "bank_name": bank_name,
+                "acc_val": acc_val,
+                "ifsc_code": ifsc_code,
+                "branch_name": branch_name,
+                "circle": circle,
+                "district_val": district_val,
+                "block_val": block_val,
+                "curr_sal": curr_sal,
+                "ask_sal": ask_sal,
+                "neg_sal": neg_sal,
+                "joining_date": joining_date,
+                "uploaded_docs_val": uploaded_docs_val,
+                "verification_val": verification_val,
+                "reviewer_val": reviewer_val,
+                "reviewed_at_val": reviewed_at_val,
+                "rejection_reason": rejection_reason,
+                "offer_acceptance_status": offer_acceptance_status,
+                "offer_accepted_at_val": offer_accepted_at_val,
+                "acceptor_val": acceptor_val,
+            }
 
-            ws.append(row_values)
+        def _populate_sheet(ws, sheet_headers, row_data_builder, app_list, center_cols, right_cols):
+            ws.views.sheetView[0].showGridLines = True
+            ws.append(sheet_headers)
+            ws.row_dimensions[1].height = 28
 
-            for col_idx in range(1, len(row_values) + 1):
-                cell = ws.cell(row=row_idx, column=col_idx)
-                cell.font = data_font
+            for col_idx in range(1, len(sheet_headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = header_alignment
                 cell.border = cell_border
-                if is_alt:
-                    cell.fill = alt_fill
 
-                if col_idx in center_col_indices:
-                    cell.alignment = data_alignment_center
-                elif col_idx in right_col_indices:
-                    cell.alignment = data_alignment_right
-                else:
-                    cell.alignment = data_alignment_left
+            for row_idx, app in enumerate(app_list, start=2):
+                ws.row_dimensions[row_idx].height = 22
+                is_alt = (row_idx % 2 == 1)
+                f = _get_app_fields(app)
+                row_vals = row_data_builder(f)
+                ws.append(row_vals)
 
-        # Adjust column widths automatically with padding, capping max length to prevent overly wide columns
-        for col in ws.columns:
-            max_len = 0
-            col_letter = get_column_letter(col[0].column)
-            for cell in col:
-                val_str = str(cell.value or "")
-                max_len = max(max_len, min(len(val_str), 50))
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
+                for col_idx in range(1, len(row_vals) + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.font = data_font
+                    cell.border = cell_border
+                    if is_alt:
+                        cell.fill = alt_fill
+
+                    if col_idx in center_cols:
+                        cell.alignment = data_alignment_center
+                    elif col_idx in right_cols:
+                        cell.alignment = data_alignment_right
+                    else:
+                        cell.alignment = data_alignment_left
+
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    val_str = str(cell.value or "")
+                    max_len = max(max_len, min(len(val_str), 50))
+                ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
+
+        # 1. Main Sheet: Candidate Applications (backward-compatible with all existing tests)
+        ws_main = wb.active
+        ws_main.title = "Candidate Applications"
+        main_headers = [
+            "Candidate Application ID", "Candidate Name", "HR / Creator Name",
+            "Creation Date", "Creation Time", "Current Candidate Status", "Candidate Designation / Role",
+            "Hero Category", "Mobile Number", "Email Address", "Aadhaar Number", "PAN Number",
+            "Current Address Line 1", "Current Address Line 2", "Current City", "Current State",
+            "Current Pincode", "Current Country", "Permanent Address Same as Current",
+            "Permanent Address Line 1", "Permanent Address Line 2", "Permanent City",
+            "Permanent State", "Permanent Pincode", "Permanent Country", "Account Holder Name",
+            "Bank Name", "Account Number", "IFSC Code", "Branch Name", "Circle", "District",
+            "Block", "Current Salary", "Asking Salary", "Negotiated Salary", "Joining Date",
+            "Uploaded Documents", "Document Verification Status", "Reviewed By", "Reviewed At",
+            "Rejection Reason", "Offer Acceptance Status", "Offer Accepted At", "Offer Accepted By",
+            "Offer Letter Status", "Offer Letter Release Date and Time",
+            "Site Joining Status", "Site Joining Date", "Last Updated By", "Last Updated Date and Time",
+        ]
+        def _main_row(f):
+            return [
+                f["app_id"], f["cand_name"], f["creator_name"], f["creation_date"], f["creation_time"],
+                f["status"], f["designation"], f["hero_category"], f["mobile"], f["email"],
+                f["aadhaar_val"], f["pan_val"], f["curr_line1"], f["curr_line2"], f["curr_city"],
+                f["curr_state"], f["curr_pincode"], f["curr_country"], f["perm_same_val"],
+                f["perm_line1"], f["perm_line2"], f["perm_city"], f["perm_state"], f["perm_pincode"],
+                f["perm_country"], f["acc_holder"], f["bank_name"], f["acc_val"], f["ifsc_code"],
+                f["branch_name"], f["circle"], f["district_val"], f["block_val"], f["curr_sal"],
+                f["ask_sal"], f["neg_sal"], f["joining_date"], f["uploaded_docs_val"],
+                f["verification_val"], f["reviewer_val"], f["reviewed_at_val"], f["rejection_reason"],
+                f["offer_acceptance_status"], f["offer_accepted_at_val"], f["acceptor_val"],
+                f["offer_letter_status"], f["offer_letter_release_datetime"],
+                f["site_joining_status"], f["site_joining_date"], f["last_updated_by"], f["last_updated_datetime"],
+            ]
+        main_center = {1, 4, 5, 6, 8, 9, 11, 12, 17, 19, 24, 29, 37, 41, 43, 44, 46, 47, 48, 49, 51}
+        main_right = {34, 35, 36}
+        _populate_sheet(ws_main, main_headers, _main_row, applications, main_center, main_right)
+
+        # Tracking Sheet Headers
+        tracking_headers = [
+            "Candidate Application ID", "Candidate Name", "HR / Creator Name",
+            "Creation Date and Time", "Designation / Role", "Approval Status",
+            "Approval Date and Time", "Offer Letter Status", "Offer Letter Release Date and Time",
+            "Site Joining Status", "Site Joining Date", "Last Updated By", "Last Updated Date and Time",
+            "Hero Category", "Mobile Number", "Email Address", "Aadhaar Number", "PAN Number",
+            "Current Address Line 1", "Current Address Line 2", "Current City", "Current State",
+            "Current Pincode", "Permanent Address Same as Current", "Permanent Address Line 1",
+            "Permanent Address Line 2", "Permanent City", "Permanent State", "Permanent Pincode",
+            "Account Holder Name", "Bank Name", "Account Number", "IFSC Code", "Branch Name",
+            "Circle", "District", "Block", "Current Salary", "Asking Salary", "Negotiated Salary",
+            "Uploaded Documents", "Document Verification Status",
+        ]
+        def _tracking_row(f):
+            return [
+                f["app_id"], f["cand_name"], f["creator_name"], f["creation_datetime"],
+                f["designation"], f["approval_status"], f["approval_datetime"],
+                f["offer_letter_status"], f["offer_letter_release_datetime"],
+                f["site_joining_status"], f["site_joining_date"], f["last_updated_by"],
+                f["last_updated_datetime"], f["hero_category"], f["mobile"], f["email"],
+                f["aadhaar_val"], f["pan_val"], f["curr_line1"], f["curr_line2"],
+                f["curr_city"], f["curr_state"], f["curr_pincode"], f["perm_same_val"],
+                f["perm_line1"], f["perm_line2"], f["perm_city"], f["perm_state"],
+                f["perm_pincode"], f["acc_holder"], f["bank_name"], f["acc_val"],
+                f["ifsc_code"], f["branch_name"], f["circle"], f["district_val"],
+                f["block_val"], f["curr_sal"], f["ask_sal"], f["neg_sal"],
+                f["uploaded_docs_val"], f["verification_val"],
+            ]
+        tracking_center = {1, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 23, 24, 29, 33}
+        tracking_right = {38, 39, 40}
+
+        # 2. Worksheet: Approved
+        approved_apps = [a for a in applications if a.status == "APPROVED"]
+        ws_approved = wb.create_sheet(title="Approved")
+        _populate_sheet(ws_approved, tracking_headers, _tracking_row, approved_apps, tracking_center, tracking_right)
+
+        # 3. Worksheet: Offer Letter Released
+        def _has_offer_released(a):
+            ltrs = getattr(a, "letters", None) or []
+            off = next((l for l in ltrs if l.letter_type == "offer_letter"), None)
+            return bool(off and (off.status in ("SENT", "ACCEPTED") or off.sent_at is not None))
+
+        offer_released_apps = [a for a in applications if _has_offer_released(a)]
+        ws_offer = wb.create_sheet(title="Offer Letter Released")
+        _populate_sheet(ws_offer, tracking_headers, _tracking_row, offer_released_apps, tracking_center, tracking_right)
+
+        # 4. Worksheet: Joined On Site
+        joined_apps = [a for a in applications if getattr(a, "site_joining_status", None) == "JOINED"]
+        ws_joined = wb.create_sheet(title="Joined On Site")
+        _populate_sheet(ws_joined, tracking_headers, _tracking_row, joined_apps, tracking_center, tracking_right)
 
         buf = io.BytesIO()
         wb.save(buf)

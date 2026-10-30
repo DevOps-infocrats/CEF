@@ -95,6 +95,8 @@ export const useUpdateApplication = () => {
     onSuccess: (savedApp) => {
       queryClient.invalidateQueries({ queryKey: CANDIDATES_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: [...CANDIDATES_QUERY_KEY, savedApp.id] });
+      queryClient.invalidateQueries({ queryKey: ['verification-applications-list'] });
+      queryClient.invalidateQueries({ queryKey: ['application-detail', savedApp.id] });
       success(`Application ${savedApp.application_number} updated successfully.`);
     },
     onError: (err: any) => {

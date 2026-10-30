@@ -31,6 +31,7 @@ def _resolve_uuid(id_str: str) -> uuid.UUID:
 # ==============================================================================
 
 @letters_bp.route("/letters/templates/<string:template_type>", methods=["GET"])
+@letters_bp.route("/templates/<string:template_type>", methods=["GET"])
 @require_auth
 def get_template_metadata(template_type: str):
     """Get active master template metadata, version, and placeholder mappings."""
@@ -63,6 +64,7 @@ def get_template_metadata(template_type: str):
 
 
 @letters_bp.route("/letters/templates/<string:template_type>/upload", methods=["POST"])
+@letters_bp.route("/templates/<string:template_type>/upload", methods=["POST"])
 @require_auth
 def upload_master_template(template_type: str):
     """Upload and activate a new version of the master Word (.docx) template."""
@@ -106,6 +108,7 @@ def upload_master_template(template_type: str):
 
 
 @letters_bp.route("/letters/templates/<string:template_type>/download", methods=["GET"])
+@letters_bp.route("/templates/<string:template_type>/download", methods=["GET"])
 @require_auth
 def download_master_template(template_type: str):
     """Download the active master Word template."""
@@ -115,12 +118,18 @@ def download_master_template(template_type: str):
     if not os.path.exists(tmpl_path):
         raise NotFoundError("Master template file not found on disk.")
 
-    return send_file(
+    resp = send_file(
         tmpl_path,
         as_attachment=True,
         download_name=tmpl.filename,
         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        conditional=False,
+        max_age=0,
     )
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 # ==============================================================================
@@ -128,6 +137,7 @@ def download_master_template(template_type: str):
 # ==============================================================================
 
 @letters_bp.route("/applications/<string:app_id>/letters", methods=["GET"])
+@letters_bp.route("/candidates/<string:app_id>/letters", methods=["GET"])
 @require_auth
 def get_candidate_letters(app_id: str):
     """Fetch or initialize generated letter drafts for an approved candidate application."""
@@ -161,6 +171,7 @@ def get_candidate_letters(app_id: str):
 
 
 @letters_bp.route("/applications/<string:app_id>/letters/<string:letter_type>", methods=["PATCH"])
+@letters_bp.route("/candidates/<string:app_id>/letters/<string:letter_type>", methods=["PATCH"])
 @require_auth
 def update_candidate_letter(app_id: str, letter_type: str):
     """Save edits, update placeholders, or upload revised DOCX for a candidate's letter draft."""
@@ -240,6 +251,7 @@ def update_candidate_letter(app_id: str, letter_type: str):
 
 
 @letters_bp.route("/applications/<string:app_id>/joining-date", methods=["PATCH", "PUT"])
+@letters_bp.route("/candidates/<string:app_id>/joining-date", methods=["PATCH", "PUT"])
 @require_auth
 def update_joining_date(app_id: str):
     """Update candidate joining date across applications and generated letter drafts."""
@@ -294,6 +306,7 @@ def update_joining_date(app_id: str):
 
 
 @letters_bp.route("/applications/<string:app_id>/letters/<string:letter_type>/download", methods=["GET"])
+@letters_bp.route("/candidates/<string:app_id>/letters/<string:letter_type>/download", methods=["GET"])
 @require_auth
 def download_candidate_letter(app_id: str, letter_type: str):
     """Download candidate letter in DOCX or PDF format."""
@@ -358,10 +371,12 @@ def download_candidate_letter(app_id: str, letter_type: str):
                 as_attachment=not is_inline,
                 download_name=f"{letter_type}_{safe_name}.pdf",
                 mimetype="application/pdf",
-                conditional=True,
-                max_age=3600,
+                conditional=False,
+                max_age=0,
             )
-            resp.headers["Cache-Control"] = "private, max-age=3600"
+            resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
             return resp
 
     docx_path = LetterGenerationService.ensure_candidate_docx_exists(letter)
@@ -371,14 +386,17 @@ def download_candidate_letter(app_id: str, letter_type: str):
         as_attachment=True,
         download_name=f"{letter_type}_{safe_name}.docx",
         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        conditional=True,
-        max_age=3600,
+        conditional=False,
+        max_age=0,
     )
-    resp.headers["Cache-Control"] = "private, max-age=3600"
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
     return resp
 
 
 @letters_bp.route("/applications/<string:app_id>/letters/send", methods=["POST"])
+@letters_bp.route("/candidates/<string:app_id>/letters/send", methods=["POST"])
 @require_auth
 def send_candidate_letters(app_id: str):
     """Dispatch both Letter of Intent and Offer Letter via email to the approved candidate."""
@@ -412,6 +430,7 @@ def send_candidate_letters(app_id: str):
 
 
 @letters_bp.route("/applications/<string:app_id>/letters/email-preview", methods=["GET"])
+@letters_bp.route("/candidates/<string:app_id>/letters/email-preview", methods=["GET"])
 @require_auth
 def preview_candidate_email(app_id: str):
     """Preview the exact congratulation email to be sent to an approved candidate."""
@@ -476,6 +495,7 @@ def _get_client_metadata() -> tuple[str, str]:
 
 
 @letters_bp.route("/applications/<string:app_id>/letters/accept", methods=["POST"])
+@letters_bp.route("/candidates/<string:app_id>/letters/accept", methods=["POST"])
 @require_auth
 def accept_candidate_offer(app_id: str):
     """Candidate accepts the formal offer letter and agreement."""

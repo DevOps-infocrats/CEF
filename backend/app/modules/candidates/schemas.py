@@ -200,6 +200,7 @@ class CreateCandidateApplicationSchema(Schema):
         allow_none=True,
         validate=validate.Range(min=0, error="Negotiated salary cannot be negative."),
     )
+    joining_date = fields.String(required=False, allow_none=True, validate=validate.Length(max=50))
 
     # Optional explicit document IDs to associate
     document_ids = fields.List(fields.UUID(), required=False, allow_none=True)
@@ -341,6 +342,17 @@ class UpdateCandidateApplicationSchema(CreateCandidateApplicationSchema):
     pass
 
 
+class UpdateJoiningStatusSchema(Schema):
+    """Validation schema for manual candidate site-joining status updates."""
+
+    status = fields.String(
+        required=True,
+        validate=validate.OneOf(["JOINED", "NOT_JOINED", "PENDING"]),
+    )
+    joining_date = fields.String(required=False, allow_none=True)
+    notes = fields.String(required=False, allow_none=True, validate=validate.Length(max=500))
+
+
 class CandidateApplicationResponseSchema(Schema):
     """Serialization schema for Candidate Application records."""
 
@@ -417,6 +429,21 @@ class CandidateApplicationResponseSchema(Schema):
     reviewed_by_name = fields.Method("get_reviewer_name", dump_only=True)
     reviewed_at = fields.DateTime(dump_only=True, allow_none=True)
     rejection_reason = fields.String(dump_only=True, allow_none=True)
+
+    # Offer Letter Tracking
+    offer_letter_status = fields.Method("get_offer_letter_status", dump_only=True)
+    offer_letter_released_at = fields.Method("get_offer_letter_released_at", dump_only=True)
+    offer_letter_released_by_name = fields.Method("get_offer_letter_released_by_name", dump_only=True)
+
+    # Site Joining Tracking
+    site_joining_status = fields.String(dump_only=True)
+    site_joining_date = fields.String(dump_only=True, allow_none=True)
+    site_joining_updated_by_id = fields.UUID(dump_only=True, allow_none=True)
+    site_joining_updated_by_name = fields.Method("get_site_joining_updated_by_name", dump_only=True)
+    site_joining_updated_at = fields.DateTime(dump_only=True, allow_none=True)
+    site_joining_notes = fields.String(dump_only=True, allow_none=True)
+    enrollment_completed = fields.Method("get_enrollment_completed", dump_only=True)
+
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
@@ -436,6 +463,44 @@ class CandidateApplicationResponseSchema(Schema):
         if getattr(obj, "reviewed_by", None):
             return obj.reviewed_by.full_name or obj.reviewed_by.email
         return None
+
+    def get_offer_letter_status(self, obj) -> str:
+        letters = getattr(obj, "letters", None) or []
+        offer = next((l for l in letters if l.letter_type == "offer_letter"), None)
+        if not offer:
+            return "NOT_GENERATED"
+        if offer.status in ("SENT", "ACCEPTED") or offer.sent_at is not None:
+            return "RELEASED" if offer.status == "SENT" else offer.status
+        return offer.status or "DRAFT"
+
+    def get_offer_letter_released_at(self, obj) -> Optional[str]:
+        letters = getattr(obj, "letters", None) or []
+        offer = next((l for l in letters if l.letter_type == "offer_letter"), None)
+        if offer and offer.sent_at:
+            return offer.sent_at.isoformat()
+        return None
+
+    def get_offer_letter_released_by_name(self, obj) -> Optional[str]:
+        letters = getattr(obj, "letters", None) or []
+        offer = next((l for l in letters if l.letter_type == "offer_letter"), None)
+        if offer and getattr(offer, "sent_by", None):
+            return offer.sent_by.full_name or offer.sent_by.username or offer.sent_by.email
+        return None
+
+    def get_site_joining_updated_by_name(self, obj) -> Optional[str]:
+        if getattr(obj, "site_joining_updated_by", None):
+            return obj.site_joining_updated_by.full_name or obj.site_joining_updated_by.username or obj.site_joining_updated_by.email
+        up_id = getattr(obj, "site_joining_updated_by_id", None)
+        if up_id:
+            from app.modules.auth.models import User
+            from app.extensions import db
+            u = db.session.get(User, up_id)
+            if u:
+                return u.full_name or u.username or u.email
+        return None
+
+    def get_enrollment_completed(self, obj) -> bool:
+        return getattr(obj, "site_joining_status", None) == "JOINED"
 
     def get_masked_mobile(self, obj) -> Optional[str]:
         raw = getattr(obj, "mobile_number", "") or ""

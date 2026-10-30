@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Any, Optional, List, Tuple
 from flask import current_app
-from sqlalchemy import select
+from sqlalchemy import select, func, update
 from app.extensions import db
 from app.common.database.transactions import atomic
 from app.common.errors.exceptions import ValidationError, NotFoundError, ForbiddenError
@@ -140,6 +140,236 @@ def update_cell_value_preserving_style(cell, new_value: str) -> None:
 set_cell_text_preserve_style = update_cell_value_preserving_style
 
 
+def update_paragraph_preserving_style(paragraph, new_value: str) -> None:
+    """Set paragraph text while preserving existing run formatting and XML properties."""
+    new_str = str(new_value).strip()
+    if not paragraph.runs:
+        paragraph.text = new_str
+        return
+    paragraph.runs[0].text = new_str
+    for r in paragraph.runs[1:]:
+        r.text = ""
+
+
+def apply_semantic_paragraph_edits(doc, edits: Dict[str, Any], letter_type: str) -> None:
+    """
+    Applies in-place semantic paragraph edits, note edits, and clause changes to candidate DOCX.
+    Matches by semantic identifier, paragraph content pattern, or placeholder.
+    """
+    if not edits:
+        return
+
+    loi_matchers = {
+        "header_tag": lambda txt: "letter of intent" in txt.lower(),
+        "subject": lambda txt: "subject:" in txt.lower() or "offer letter" in txt.lower(),
+        "salutation": lambda txt: txt.strip().startswith("Dear "),
+        "p_intro": lambda txt: "pleased to inform you" in txt or "intends to engage your services" in txt,
+        "p_location": lambda txt: "initial place of services" in txt,
+        "p_start_date": lambda txt: "start date of services:" in txt.lower(),
+        "p_comp_header": lambda txt: "compensation payable:" in txt.lower(),
+        "p_perf_note": lambda txt: "performance linked component" in txt.lower(),
+        "p_reserve_note": lambda txt: "reserves the right to revise" in txt.lower(),
+        "p_transfer_h": lambda txt: "transferability:" in txt.lower(),
+        "p_transfer_b": lambda txt: "services shall be transferable" in txt.lower(),
+        "p_compliance_h": lambda txt: "compliance with company policies:" in txt.lower(),
+        "p_compliance_b": lambda txt: "observe and comply with all applicable" in txt.lower(),
+        "p_acceptance_h": lambda txt: "acceptance:" in txt.lower(),
+        "p_acceptance_b1": lambda txt: "terms are acceptable to you" in txt.lower(),
+        "p_acceptance_b2": lambda txt: "failure to report for duty" in txt.lower(),
+        "p_acceptance_b3": lambda txt: "look forward to your association" in txt.lower(),
+        "yours_faithfully": lambda txt: "yours faithfully" in txt.lower(),
+        "for_company": lambda txt: "for fiber force" in txt.lower(),
+        "authorized_signatory": lambda txt: "authorized signatory" in txt.lower(),
+        "cand_acceptance_title": lambda txt: "acceptance by candidate" in txt.lower(),
+        "cand_acceptance_text": lambda txt: "have read, understood" in txt.lower(),
+        "cand_sig_label": lambda txt: txt.strip().startswith("Signature:"),
+        "cand_name_label": lambda txt: txt.strip().startswith("Name:"),
+        "cand_date_label": lambda txt: txt.strip().startswith("Date:"),
+    }
+
+    offer_matchers = {
+        "header_tag": lambda txt: "appointment" in txt.lower() or "offer letter" in txt.lower(),
+        "subject": lambda txt: "re: offer letter" in txt.lower() or (txt.strip().startswith("Re:") and "offer" in txt.lower()),
+        "salutation": lambda txt: txt.strip().startswith("Dear "),
+        "p10": lambda txt: "appointed as" in txt.lower(),
+        "p11": lambda txt: "revisions in your salary" in txt.lower(),
+        "p13": lambda txt: "appointment will be subject to the terms" in txt.lower(),
+        "p14": lambda txt: "sign and return the duplicate copy" in txt.lower(),
+        "p16": lambda txt: "join on or before" in txt.lower(),
+        "p19": lambda txt: "look forward to working together" in txt.lower(),
+        "yours_faithfully": lambda txt: "yours faithfully" in txt.lower(),
+        "received_accepted": lambda txt: "received & accepted" in txt.lower(),
+        "hr_dept": lambda txt: "hr department" in txt.lower(),
+        "company_name": lambda txt: "fiber force private limited" in txt.lower(),
+        "annex1_title": lambda txt: txt.strip() == "Annexure I" or ("annexure i" in txt.lower() and "ii" not in txt.lower()),
+        "annex1_subtitle": lambda txt: "terms and conditions of appointment" in txt.lower(),
+        "annex1_s1_h": lambda txt: "service subject to rules" in txt.lower(),
+        "annex1_s1_b": lambda txt: "governed by the company" in txt.lower(),
+        "annex1_s2_h": lambda txt: txt.strip().startswith("Probation"),
+        "annex1_s3_h": lambda txt: "provident fund & esi" in txt.lower(),
+        "annex1_s3_b": lambda txt: "provident fund as per" in txt.lower(),
+        "annex1_s4_h": lambda txt: txt.strip() == "Transfer",
+        "annex1_s4_b": lambda txt: "liable to be transferred" in txt.lower(),
+        "annex1_s5_h": lambda txt: "transfer & mobility clause" in txt.lower(),
+        "annex1_s5_b": lambda txt: "transferable to any office" in txt.lower(),
+        "annex1_s6_h": lambda txt: "intellectual property rights" in txt.lower(),
+        "annex1_s6_b": lambda txt: "invention, development" in txt.lower(),
+        "annex1_s7_h": lambda txt: "moonlighting" in txt.lower(),
+        "annex1_s7_b": lambda txt: "devote full time" in txt.lower() or "during the term of employment" in txt.lower(),
+        "annex1_s8_h": lambda txt: "non-solicit" in txt.lower(),
+        "annex1_s8_b": lambda txt: "12 months after cessation" in txt.lower(),
+        "annex1_s9_h": lambda txt: "leaves and other service benefits" in txt.lower(),
+        "annex1_s9_b": lambda txt: "entitled for leave" in txt.lower(),
+        "annex1_s10_h": lambda txt: "certificate and testimonials" in txt.lower(),
+        "annex1_s10_b": lambda txt: "certified copies of your certificates" in txt.lower(),
+        "annex1_s11_h": lambda txt: txt.strip() == "Status",
+        "annex1_s11_b": lambda txt: "informed about any change in your address" in txt.lower(),
+        "annex1_s12_h": lambda txt: txt.strip().startswith("Secrecy"),
+        "annex1_s13_h": lambda txt: txt.strip() == "Separation",
+        "annex1_s13_sub1": lambda txt: "co-terminus employment" in txt.lower(),
+        "annex2_title": lambda txt: "annexure" in txt.lower() and "ii" in txt.lower(),
+        "annex2_note1": lambda txt: "income tax will be deducted" in txt.lower(),
+        "annex2_note2": lambda txt: "prohibitory deductions" in txt.lower(),
+        "annex2_note3": lambda txt: "mediclaim as per policy" in txt.lower(),
+    }
+
+    matchers = loi_matchers if letter_type == TEMPLATE_TYPE_LOI else offer_matchers
+
+    for key, new_val in edits.items():
+        if new_val is None or not str(new_val).strip():
+            continue
+        new_text = str(new_val).strip()
+
+        # 1. Check if key is a semantic key
+        matcher_fn = matchers.get(key)
+        matched = False
+        if matcher_fn:
+            for p in doc.paragraphs:
+                if p.text and matcher_fn(p.text):
+                    update_paragraph_preserving_style(p, new_text)
+                    matched = True
+                    break
+
+        if matched:
+            continue
+
+        # 2. Check direct paragraph placeholder {{key}}
+        placeholder = f"{{{{{key}}}}}"
+        placeholder_spaced = f"{{{{ {key} }}}}"
+        for p in doc.paragraphs:
+            if placeholder in p.text or placeholder_spaced in p.text:
+                replace_in_runs(p, placeholder, new_text)
+                replace_in_runs(p, placeholder_spaced, new_text)
+                matched = True
+
+        for t in doc.tables:
+            for row in t.rows:
+                for cell in row.cells:
+                    if placeholder in cell.text or placeholder_spaced in cell.text:
+                        replace_in_cell(cell, placeholder, new_text)
+                        replace_in_cell(cell, placeholder_spaced, new_text)
+                        matched = True
+
+        if matched:
+            continue
+
+        # 3. Direct substring search and replacement if key appears in text
+        if len(key) >= 3:
+            for p in doc.paragraphs:
+                if key in p.text:
+                    replace_in_runs(p, key, new_text)
+            for t in doc.tables:
+                for row in t.rows:
+                    for cell in row.cells:
+                        if key in cell.text:
+                            replace_in_cell(cell, key, new_text)
+
+
+def normalize_letter_layout_page_bounds(doc, letter_type: str) -> bool:
+    """
+    Ensure generated and edited candidate letters preserve their original intended page layout.
+    For Letter of Intent (original 2-page document):
+    1. Removes artificial consecutive blank paragraphs between Section 2 ('Transferability')
+       and Section 3 ('Compliance with Company Policies:'). These blank paragraphs were placed
+       by manual Enter key presses in the template; when dynamic candidate content (such as
+       longer multi-line address, name, or location strings) expands on Page 1, these blank paragraphs
+       spill onto Page 2, occupying 60-80pt of vertical space at the top of Page 2 and pushing
+       the bottom acceptance block ('Date: ') onto an unintended 3rd page.
+    2. Explicitly sets page_break_before on Section 3 ('3. Compliance with Company Policies:'),
+       guaranteeing Section 3 starts cleanly at the top margin of Page 2 without wasted blank space.
+    3. Strips any trailing empty paragraphs at the end of the document to avoid trailing blank pages.
+    """
+    changed = False
+    is_loi = (letter_type == TEMPLATE_TYPE_LOI) or ("loi" in str(letter_type).lower())
+    if is_loi:
+        sec3_idx = None
+        for idx, p in enumerate(doc.paragraphs):
+            if "3. Compliance with Company Policies:" in p.text:
+                sec3_idx = idx
+                break
+
+        if sec3_idx is not None:
+            # Remove any empty paragraphs immediately preceding Section 3
+            p_before_idx = sec3_idx - 1
+            while p_before_idx >= 0 and not doc.paragraphs[p_before_idx].text.strip():
+                empty_p = doc.paragraphs[p_before_idx]
+                empty_p._p.getparent().remove(empty_p._p)
+                p_before_idx -= 1
+                changed = True
+
+            # Ensure Section 3 starts cleanly on Page 2
+            for p in doc.paragraphs:
+                if "3. Compliance with Company Policies:" in p.text:
+                    if not p.paragraph_format.page_break_before:
+                        p.paragraph_format.page_break_before = True
+                        changed = True
+                    break
+
+    # Strip any trailing blank paragraphs at document end
+    while doc.paragraphs and not doc.paragraphs[-1].text.strip():
+        last_p = doc.paragraphs[-1]
+        last_p._p.getparent().remove(last_p._p)
+        changed = True
+
+    return changed
+
+
+def prune_trailing_overflow_pages(pdf_path: str, max_expected_pages: int = 2) -> bool:
+    """
+    Ensure converted PDF does not exceed intended page bounds if conversion engine
+    created an accidental trailing page containing only running header/footer or minimal text (< 200 chars).
+    """
+    if not pdf_path or not os.path.exists(pdf_path):
+        return False
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(pdf_path)
+        total_pages = len(reader.pages)
+        if total_pages <= max_expected_pages:
+            return False
+
+        if total_pages == max_expected_pages + 1:
+            last_page = reader.pages[-1]
+            txt = last_page.extract_text().strip()
+            is_spill = False
+            if len(txt) < 200:
+                is_spill = True
+            elif "registered office" in txt.lower() and len(txt.replace("registered office", "").strip()) < 80:
+                is_spill = True
+
+            if is_spill:
+                writer = pypdf.PdfWriter()
+                for i in range(max_expected_pages):
+                    writer.add_page(reader.pages[i])
+                with open(pdf_path, "wb") as f:
+                    writer.write(f)
+                return True
+    except Exception as e:
+        if current_app:
+            current_app.logger.warning(f"Could not prune trailing overflow page from PDF '{pdf_path}': {e}")
+    return False
+
+
 def convert_docx_to_pdf_libreoffice(docx_path: str, pdf_path: str) -> bool:
     """Convert a DOCX file to PDF using headless LibreOffice (Linux & Windows)."""
     import shutil
@@ -202,7 +432,7 @@ def convert_docx_to_pdf_libreoffice(docx_path: str, pdf_path: str) -> bool:
     return False
 
 
-def convert_docx_to_pdf_native(docx_path: str, pdf_path: str) -> bool:
+def convert_docx_to_pdf_native(docx_path: str, pdf_path: str, letter_type: Optional[str] = None) -> bool:
     """Convert a DOCX file to PDF preserving native fonts, tables, margins, and page breaks."""
     abs_docx = os.path.abspath(docx_path)
     abs_pdf = os.path.abspath(pdf_path)
@@ -301,10 +531,15 @@ def convert_docx_to_pdf_native(docx_path: str, pdf_path: str) -> bool:
                         c.setFont("Helvetica", 9)
             c.save()
             if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
-                return True
+                pass
         except Exception as e:
             if current_app:
                 current_app.logger.error(f"ReportLab fallback PDF failed: {e}")
+
+    if os.path.exists(abs_pdf) and os.path.getsize(abs_pdf) > 0:
+        if letter_type == TEMPLATE_TYPE_LOI or "loi" in os.path.basename(docx_path).lower():
+            prune_trailing_overflow_pages(abs_pdf, max_expected_pages=2)
+        return True
 
     return False
 
@@ -321,7 +556,11 @@ def resolve_storage_path(path: Optional[str]) -> str:
     try:
         storage_root = os.path.abspath(os.path.join(current_app.root_path, "..", "storage"))
     except Exception:
-        storage_root = os.path.abspath(os.path.join(os.getcwd(), "storage"))
+        backend_storage = os.path.abspath(os.path.join(os.getcwd(), "backend", "storage"))
+        if os.path.exists(backend_storage):
+            storage_root = backend_storage
+        else:
+            storage_root = os.path.abspath(os.path.join(os.getcwd(), "storage"))
 
     # If the file already exists directly on disk as specified, return normalized path
     if os.path.exists(path):
@@ -337,16 +576,34 @@ def resolve_storage_path(path: Optional[str]) -> str:
         if idx != -1:
             rel = p[idx + 1 :]
             resolved = os.path.abspath(os.path.join(storage_root, *rel.split("/")))
+            if os.path.exists(resolved):
+                return resolved
+            alt_backend = os.path.abspath(os.path.join(os.getcwd(), "backend", "storage", *rel.split("/")))
+            if os.path.exists(alt_backend):
+                return alt_backend
             os.makedirs(os.path.dirname(resolved), exist_ok=True)
             return resolved
         if p.startswith(f"{sub}/"):
             resolved = os.path.abspath(os.path.join(storage_root, *p.split("/")))
+            if os.path.exists(resolved):
+                return resolved
+            alt_backend = os.path.abspath(os.path.join(os.getcwd(), "backend", "storage", *p.split("/")))
+            if os.path.exists(alt_backend):
+                return alt_backend
             os.makedirs(os.path.dirname(resolved), exist_ok=True)
             return resolved
 
     # Fallback to storage_root with basename
     fname = os.path.basename(p)
     resolved = os.path.abspath(os.path.join(storage_root, fname))
+    if os.path.exists(resolved):
+        return resolved
+    alt_tmpl = os.path.abspath(os.path.join(storage_root, "templates", fname))
+    if os.path.exists(alt_tmpl):
+        return alt_tmpl
+    alt_backend_tmpl = os.path.abspath(os.path.join(os.getcwd(), "backend", "storage", "templates", fname))
+    if os.path.exists(alt_backend_tmpl):
+        return alt_backend_tmpl
     os.makedirs(os.path.dirname(resolved), exist_ok=True)
     return resolved
 
@@ -942,16 +1199,13 @@ class LetterTemplateService:
 
     @staticmethod
     def ensure_default_templates() -> None:
-        """Seed master LOI and Offer Letter templates if not already present, preserving original files untouched."""
+        """Seed master LOI and Offer Letter v1 templates if not already present in the database, preserving all uploaded templates untouched."""
         storage_dir = get_templates_storage_dir()
 
         # Check Letter of Intent
-        loi_tmpl = db.session.execute(
-            select(DocumentTemplate)
-            .where(DocumentTemplate.template_type == TEMPLATE_TYPE_LOI)
-            .where(DocumentTemplate.is_active.is_(True))
-            .order_by(DocumentTemplate.version.desc())
-        ).scalars().first()
+        loi_count = db.session.execute(
+            select(func.count(DocumentTemplate.id)).where(DocumentTemplate.template_type == TEMPLATE_TYPE_LOI)
+        ).scalar() or 0
 
         loi_path = os.path.join(storage_dir, "letter_of_intent_v1.docx")
         if not os.path.exists(loi_path):
@@ -963,7 +1217,7 @@ class LetterTemplateService:
             doc.add_paragraph("Start Date of Services: {{joining_date}}")
             doc.save(loi_path)
 
-        if not loi_tmpl:
+        if loi_count == 0:
             loi_tmpl = DocumentTemplate(
                 template_type=TEMPLATE_TYPE_LOI,
                 name="Letter of Intent Master Template",
@@ -974,18 +1228,11 @@ class LetterTemplateService:
                 field_mappings=DEFAULT_LOI_MAPPINGS,
             )
             db.session.add(loi_tmpl)
-        else:
-            loi_tmpl.storage_path = resolve_storage_path(loi_tmpl.storage_path)
-            if not os.path.exists(loi_tmpl.storage_path):
-                loi_tmpl.storage_path = loi_path
 
         # Check Offer Letter
-        offer_tmpl = db.session.execute(
-            select(DocumentTemplate)
-            .where(DocumentTemplate.template_type == TEMPLATE_TYPE_OFFER)
-            .where(DocumentTemplate.is_active.is_(True))
-            .order_by(DocumentTemplate.version.desc())
-        ).scalars().first()
+        offer_count = db.session.execute(
+            select(func.count(DocumentTemplate.id)).where(DocumentTemplate.template_type == TEMPLATE_TYPE_OFFER)
+        ).scalar() or 0
 
         offer_path = os.path.join(storage_dir, "offer_letter_v1.docx")
         if not os.path.exists(offer_path):
@@ -997,7 +1244,7 @@ class LetterTemplateService:
             doc.add_paragraph("Joining Date: {{joining_date}}")
             doc.save(offer_path)
 
-        if not offer_tmpl:
+        if offer_count == 0:
             offer_tmpl = DocumentTemplate(
                 template_type=TEMPLATE_TYPE_OFFER,
                 name="Offer Letter Master Template",
@@ -1008,27 +1255,6 @@ class LetterTemplateService:
                 field_mappings=DEFAULT_OFFER_MAPPINGS,
             )
             db.session.add(offer_tmpl)
-        else:
-            offer_tmpl.storage_path = resolve_storage_path(offer_tmpl.storage_path)
-            if not os.path.exists(offer_tmpl.storage_path):
-                offer_tmpl.storage_path = offer_path
-
-        # Self-heal all DocumentTemplate records with outdated Windows paths
-        all_templates = db.session.execute(select(DocumentTemplate)).scalars().all()
-        for t in all_templates:
-            res_t = resolve_storage_path(t.storage_path)
-            if not os.path.exists(res_t):
-                fallback_file = loi_path if t.template_type == TEMPLATE_TYPE_LOI else offer_path
-                res_t = fallback_file
-            t.storage_path = res_t
-
-        # Self-heal all CandidateLetter records with outdated Windows paths
-        all_letters = db.session.execute(select(CandidateLetter)).scalars().all()
-        for l in all_letters:
-            if l.docx_storage_path:
-                l.docx_storage_path = resolve_storage_path(l.docx_storage_path)
-            if l.pdf_storage_path:
-                l.pdf_storage_path = resolve_storage_path(l.pdf_storage_path)
 
         db.session.commit()
 
@@ -1037,28 +1263,50 @@ class LetterTemplateService:
         if template_type not in VALID_TEMPLATE_TYPES:
             raise ValidationError(f"Invalid template type: '{template_type}'. Expected one of {list(VALID_TEMPLATE_TYPES)}")
 
-        LetterTemplateService.ensure_default_templates()
-
+        # Query the currently active template with the highest version
         tmpl = db.session.execute(
             select(DocumentTemplate)
             .where(DocumentTemplate.template_type == template_type)
             .where(DocumentTemplate.is_active.is_(True))
-            .order_by(DocumentTemplate.version.desc())
+            .order_by(DocumentTemplate.version.desc(), DocumentTemplate.created_at.desc())
         ).scalars().first()
+
+        if not tmpl:
+            LetterTemplateService.ensure_default_templates()
+            tmpl = db.session.execute(
+                select(DocumentTemplate)
+                .where(DocumentTemplate.template_type == template_type)
+                .where(DocumentTemplate.is_active.is_(True))
+                .order_by(DocumentTemplate.version.desc(), DocumentTemplate.created_at.desc())
+            ).scalars().first()
 
         if not tmpl:
             raise NotFoundError(f"No active template found for '{template_type}'.")
 
         resolved = resolve_storage_path(tmpl.storage_path)
-        if not os.path.exists(resolved):
-            base_filename = "letter_of_intent_v1.docx" if template_type == TEMPLATE_TYPE_LOI else "offer_letter_v1.docx"
-            storage_dir = get_templates_storage_dir()
-            v1_path = os.path.join(storage_dir, base_filename)
-            resolved = v1_path
+        if resolved and os.path.exists(resolved):
+            if tmpl.storage_path != resolved:
+                tmpl.storage_path = resolved
+                db.session.commit()
+            return tmpl
 
-        if tmpl.storage_path != resolved:
-            tmpl.storage_path = resolved
-            db.session.commit()
+        # If resolved path does not exist directly, check by filename under storage_dir
+        storage_dir = get_templates_storage_dir()
+        if tmpl.storage_path:
+            candidate_by_name = os.path.join(storage_dir, os.path.basename(tmpl.storage_path))
+            if os.path.exists(candidate_by_name):
+                tmpl.storage_path = candidate_by_name
+                db.session.commit()
+                return tmpl
+
+        # Fallback to default v1 on disk without permanently overwriting database record
+        base_filename = "letter_of_intent_v1.docx" if template_type == TEMPLATE_TYPE_LOI else "offer_letter_v1.docx"
+        v1_path = os.path.join(storage_dir, base_filename)
+        if os.path.exists(v1_path):
+            current_app.logger.warning(
+                f"Master template '{tmpl.filename}' (v{tmpl.version}) physical file not found at '{tmpl.storage_path}'. Falling back to default v1."
+            )
+            return tmpl
 
         return tmpl
 
@@ -1071,7 +1319,7 @@ class LetterTemplateService:
         if template_type not in VALID_TEMPLATE_TYPES:
             raise ValidationError(f"Invalid template type: '{template_type}'")
 
-        if not file or not file.filename:
+        if not file or not getattr(file, "filename", None):
             raise ValidationError("A valid master .docx file must be uploaded.")
 
         filename = file.filename
@@ -1080,14 +1328,13 @@ class LetterTemplateService:
 
         storage_dir = get_templates_storage_dir()
 
-        # Find latest version
-        current_active = db.session.execute(
-            select(DocumentTemplate)
+        # Find maximum version across all existing templates of this type
+        max_version = db.session.execute(
+            select(func.max(DocumentTemplate.version))
             .where(DocumentTemplate.template_type == template_type)
-            .order_by(DocumentTemplate.version.desc())
-        ).scalars().first()
+        ).scalar() or 0
 
-        new_version = (current_active.version + 1) if current_active else 1
+        new_version = max_version + 1
         safe_filename = f"{template_type}_v{new_version}_{uuid.uuid4().hex[:8]}.docx"
         target_path = os.path.join(storage_dir, safe_filename)
 
@@ -1096,31 +1343,45 @@ class LetterTemplateService:
 
         # Validate that the file is a valid Word document
         try:
-            docx.Document(target_path)
+            doc = docx.Document(target_path)
         except Exception:
             if os.path.exists(target_path):
                 os.remove(target_path)
             raise ValidationError("The uploaded file is corrupted or not a valid Microsoft Word (.docx) document.")
 
-        # Deactivate previous active templates of this type
-        with atomic():
-            if current_active:
-                db.session.execute(
-                    select(DocumentTemplate)
-                    .where(DocumentTemplate.template_type == template_type)
-                    .where(DocumentTemplate.is_active.is_(True))
-                )
-                prev_templates = db.session.execute(
-                    select(DocumentTemplate)
-                    .where(DocumentTemplate.template_type == template_type)
-                    .where(DocumentTemplate.is_active.is_(True))
-                ).scalars().all()
-                for pt in prev_templates:
-                    pt.is_active = False
+        # Discover placeholder mappings in the uploaded document
+        import re
+        discovered_placeholders = set()
+        placeholder_regex = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+        for p in doc.paragraphs:
+            for match in placeholder_regex.findall(p.text):
+                discovered_placeholders.add(match)
+        for t in doc.tables:
+            for row in t.rows:
+                for cell in row.cells:
+                    for match in placeholder_regex.findall(cell.text):
+                        discovered_placeholders.add(match)
 
-            mappings = (
-                DEFAULT_LOI_MAPPINGS if template_type == TEMPLATE_TYPE_LOI else DEFAULT_OFFER_MAPPINGS
-            )
+        default_map = (
+            DEFAULT_LOI_MAPPINGS if template_type == TEMPLATE_TYPE_LOI else DEFAULT_OFFER_MAPPINGS
+        )
+        if discovered_placeholders:
+            mappings = [
+                {"placeholder": f"{{{{{k}}}}}", "label": k.replace("_", " ").title(), "description": f"Field '{k}'"}
+                for k in sorted(discovered_placeholders)
+            ]
+        else:
+            mappings = default_map
+
+        # Atomically deactivate previous active templates and save new active master
+        with atomic():
+            all_prev = db.session.execute(
+                select(DocumentTemplate)
+                .where(DocumentTemplate.template_type == template_type)
+                .where(DocumentTemplate.is_active.is_(True))
+            ).scalars().all()
+            for pt in all_prev:
+                pt.is_active = False
 
             new_tmpl = DocumentTemplate(
                 template_type=template_type,
@@ -1541,11 +1802,29 @@ class LetterGenerationService:
                 letter.field_values or {},
                 letter.letter_type,
             )
+            # Re-apply any saved content_edits on top of the freshly rendered DOCX
+            content_edits = (letter.field_values or {}).get("content_edits")
+            if content_edits and os.path.exists(resolved_docx):
+                try:
+                    d = docx.Document(resolved_docx)
+                    apply_semantic_paragraph_edits(d, content_edits, letter.letter_type)
+                    d.save(resolved_docx)
+                except Exception as e:
+                    current_app.logger.warning(f"Could not re-apply content edits on regenerated DOCX: {e}")
+
             letter.docx_storage_path = resolved_docx
             db.session.commit()
-        elif letter.docx_storage_path != resolved_docx:
-            letter.docx_storage_path = resolved_docx
-            db.session.commit()
+        else:
+            if letter.docx_storage_path != resolved_docx:
+                letter.docx_storage_path = resolved_docx
+                db.session.commit()
+            if resolved_docx and os.path.exists(resolved_docx):
+                try:
+                    d = docx.Document(resolved_docx)
+                    if normalize_letter_layout_page_bounds(d, letter.letter_type):
+                        d.save(resolved_docx)
+                except Exception as e:
+                    current_app.logger.warning(f"Could not normalize layout bounds on existing DOCX: {e}")
 
         return resolved_docx
 
@@ -1817,14 +2096,22 @@ class LetterGenerationService:
                         for cell in row.cells:
                             replace_in_cell(cell, target, rep)
 
+        # Ensure candidate document layout preserves page bounds (2 pages for LOI)
+        normalize_letter_layout_page_bounds(doc, letter_type)
         doc.save(output_path)
 
     @staticmethod
     def extract_letter_content(letter: CandidateLetter) -> Dict[str, Any]:
         """Extract structured paragraphs, table cells, and fields from candidate DOCX."""
         docx_path = LetterGenerationService.ensure_candidate_docx_exists(letter)
+        saved_content_edits = (letter.field_values or {}).get("content_edits", {})
         if not docx_path or not os.path.exists(docx_path):
-            return {"paragraphs": {}, "tables": [], "field_values": letter.field_values or {}}
+            return {
+                "paragraphs": {},
+                "tables": [],
+                "field_values": letter.field_values or {},
+                "content_edits": saved_content_edits,
+            }
         try:
             doc = docx.Document(docx_path)
             paragraphs = {str(i): p.text for i, p in enumerate(doc.paragraphs) if p.text.strip()}
@@ -1836,10 +2123,16 @@ class LetterGenerationService:
                 "paragraphs": paragraphs,
                 "tables": tables,
                 "field_values": letter.field_values or {},
+                "content_edits": saved_content_edits,
             }
         except Exception as e:
             current_app.logger.warning(f"Failed to extract DOCX content: {e}")
-            return {"paragraphs": {}, "tables": [], "field_values": letter.field_values or {}}
+            return {
+                "paragraphs": {},
+                "tables": [],
+                "field_values": letter.field_values or {},
+                "content_edits": saved_content_edits,
+            }
 
     @staticmethod
     def update_letter_draft(
@@ -1882,6 +2175,14 @@ class LetterGenerationService:
                         elif raw_jd == "":
                             field_values["joining_date"] = ""
                     merged_fields.update(field_values)
+
+                # Persist content edits across sessions and reloads
+                content_edits = dict(merged_fields.get("content_edits") or {})
+                if text_edits:
+                    content_edits.update(text_edits)
+                if field_values and isinstance(field_values.get("content_edits"), dict):
+                    content_edits.update(field_values["content_edits"])
+                merged_fields["content_edits"] = content_edits
 
                 # 1. If monthly_salary updated, recalculate salary breakdown
                 if field_values and "monthly_salary" in field_values:
@@ -1945,25 +2246,31 @@ class LetterGenerationService:
                             for p in doc.paragraphs:
                                 replace_in_runs(p, f"{{{{{k}}}}}", s_new)
                                 replace_in_runs(p, f"{{{{ {k} }}}}", s_new)
-                                if s_old:
+                                if s_old and len(s_old) >= 5 and s_old.lower() not in ("date", "name", "role", "city", "state", "user", "type"):
                                     replace_in_runs(p, s_old, s_new)
                                 if k == "joining_date":
                                     if letter_type == TEMPLATE_TYPE_LOI:
                                         replace_in_runs(p, "Start Date of Services: 01/11/2026", f"Start Date of Services: {s_new}")
+                                        replace_in_runs(p, "Start Date of Services: ", f"Start Date of Services: {s_new}")
+                                        replace_in_runs(p, "Start Date of Services:", f"Start Date of Services: {s_new}")
                                         replace_in_runs(p, "01/11/2026", s_new)
-                                        if s_old:
+                                        if s_old and len(s_old) >= 5:
                                             replace_in_runs(p, f"Start Date of Services: {s_old}", f"Start Date of Services: {s_new}")
+                                            replace_in_runs(p, s_old, s_new)
                                     elif letter_type == TEMPLATE_TYPE_OFFER:
                                         replace_in_runs(p, "Dated: 01/10/2026.", f"Dated: {s_new}.")
+                                        replace_in_runs(p, "Dated: .", f"Dated: {s_new}.")
+                                        replace_in_runs(p, "Dated: ", f"Dated: {s_new}")
                                         replace_in_runs(p, "01/10/2026", s_new)
-                                        if s_old:
+                                        if s_old and len(s_old) >= 5:
                                             replace_in_runs(p, f"Dated: {s_old}.", f"Dated: {s_new}.")
+                                            replace_in_runs(p, s_old, s_new)
                             for t in doc.tables:
                                 for row in t.rows:
                                     for cell in row.cells:
                                         replace_in_cell(cell, f"{{{{{k}}}}}", s_new)
                                         replace_in_cell(cell, f"{{{{ {k} }}}}", s_new)
-                                        if s_old:
+                                        if s_old and len(s_old) >= 5 and s_old.lower() not in ("date", "name", "role", "city", "state", "user", "type"):
                                             replace_in_cell(cell, s_old, s_new)
 
                 # 3. Direct paragraph index replacements
@@ -1995,16 +2302,23 @@ class LetterGenerationService:
                         except (ValueError, IndexError):
                             pass
 
-                # 5. Direct text replacements
+                # 5. Semantic paragraph, note, and clause replacements
+                if content_edits:
+                    apply_semantic_paragraph_edits(doc, content_edits, letter_type)
+
+                # 6. Direct text replacements
                 if text_edits:
                     for old_t, new_t in text_edits.items():
-                        if old_t and old_t != new_t:
+                        if old_t and old_t != new_t and len(old_t) >= 3:
                             for p in doc.paragraphs:
-                                replace_in_runs(p, old_t, new_t)
+                                replace_in_runs(p, old_t, str(new_t))
                             for t in doc.tables:
                                 for row in t.rows:
                                     for cell in row.cells:
-                                        replace_in_cell(cell, old_t, new_t)
+                                        replace_in_cell(cell, old_t, str(new_t))
+
+                if letter_type == TEMPLATE_TYPE_LOI:
+                    normalize_letter_layout_page_bounds(doc, letter_type)
 
                 doc.save(docx_path)
                 letter.docx_storage_path = docx_path
@@ -2044,14 +2358,19 @@ class LetterGenerationService:
                                                 replace_in_runs(p, old_peer_jd, new_jd)
                                             if peer_type == TEMPLATE_TYPE_LOI:
                                                 replace_in_runs(p, "Start Date of Services: 01/11/2026", f"Start Date of Services: {new_jd}")
+                                                replace_in_runs(p, "Start Date of Services: ", f"Start Date of Services: {new_jd}")
                                                 replace_in_runs(p, "01/11/2026", new_jd)
                                                 if old_peer_jd:
                                                     replace_in_runs(p, f"Start Date of Services: {old_peer_jd}", f"Start Date of Services: {new_jd}")
+                                                    replace_in_runs(p, old_peer_jd, new_jd)
                                             else:
                                                 replace_in_runs(p, "Dated: 01/10/2026.", f"Dated: {new_jd}.")
+                                                replace_in_runs(p, "Dated: .", f"Dated: {new_jd}.")
+                                                replace_in_runs(p, "Dated: ", f"Dated: {new_jd}")
                                                 replace_in_runs(p, "01/10/2026", new_jd)
                                                 if old_peer_jd:
                                                     replace_in_runs(p, f"Dated: {old_peer_jd}.", f"Dated: {new_jd}.")
+                                                    replace_in_runs(p, old_peer_jd, new_jd)
                                         for t in peer_doc.tables:
                                             for row in t.rows:
                                                 for cell in row.cells:
@@ -2059,6 +2378,8 @@ class LetterGenerationService:
                                                     replace_in_cell(cell, "{{ joining_date }}", new_jd)
                                                     if old_peer_jd:
                                                         replace_in_cell(cell, old_peer_jd, new_jd)
+                                        if peer_type == TEMPLATE_TYPE_LOI:
+                                            normalize_letter_layout_page_bounds(peer_doc, peer_type)
                                         peer_doc.save(peer_docx_path)
                                         peer_letter.docx_storage_path = peer_docx_path
                                     except Exception:
@@ -2103,8 +2424,18 @@ class LetterGenerationService:
         if resolved_pdf and os.path.exists(resolved_pdf):
             try:
                 if os.path.getmtime(resolved_pdf) >= os.path.getmtime(docx_path):
-                    letter.pdf_storage_path = resolved_pdf
-                    return resolved_pdf
+                    # Ensure cached LOI PDF does not exceed 2 pages due to stale generation
+                    if letter.letter_type == TEMPLATE_TYPE_LOI and PYPDF_AVAILABLE:
+                        try:
+                            reader = PdfReader(resolved_pdf)
+                            if len(reader.pages) > 2:
+                                current_app.logger.info(f"Invalidating stale {len(reader.pages)}-page cached LOI PDF: {resolved_pdf}")
+                                resolved_pdf = ""
+                        except Exception:
+                            pass
+                    if resolved_pdf:
+                        letter.pdf_storage_path = resolved_pdf
+                        return resolved_pdf
             except Exception:
                 pass
 
@@ -2145,6 +2476,8 @@ class LetterGenerationService:
                                 c.setFont("Helvetica", 10)
                 c.save()
                 if os.path.exists(pdf_path):
+                    if letter.letter_type == TEMPLATE_TYPE_LOI:
+                        prune_trailing_overflow_pages(pdf_path, max_expected_pages=2)
                     letter.pdf_storage_path = pdf_path
                     db.session.commit()
                     return pdf_path
@@ -2152,8 +2485,10 @@ class LetterGenerationService:
                 current_app.logger.error(f"Test PDF rendering error: {e}")
 
         # Native conversion (Windows Word COM, LibreOffice headless, docx2pdf, or ReportLab fallback)
-        converted = convert_docx_to_pdf_native(docx_path, pdf_path)
+        converted = convert_docx_to_pdf_native(docx_path, pdf_path, letter_type=letter.letter_type)
         if converted and os.path.exists(pdf_path):
+            if letter.letter_type == TEMPLATE_TYPE_LOI:
+                prune_trailing_overflow_pages(pdf_path, max_expected_pages=2)
             letter.pdf_storage_path = pdf_path
             db.session.commit()
             return pdf_path

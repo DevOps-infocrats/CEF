@@ -42,6 +42,12 @@ APPLICATION_STATUS_APPROVED = "APPROVED"
 APPLICATION_STATUS_OFFER_ACCEPTED = "OFFER_ACCEPTED"
 APPLICATION_STATUS_REJECTED = "REJECTED"
 
+# Site Joining Statuses
+JOINING_STATUS_NOT_JOINED = "NOT_JOINED"
+JOINING_STATUS_PENDING = "PENDING"
+JOINING_STATUS_JOINED = "JOINED"
+VALID_JOINING_STATUSES = {JOINING_STATUS_NOT_JOINED, JOINING_STATUS_PENDING, JOINING_STATUS_JOINED}
+
 # Document Categories
 DOCUMENT_CATEGORIES_MANDATORY = ["aadhaar_card", "pan_card"]
 DOCUMENT_CATEGORIES_BANK = ["bank_passbook", "cancelled_cheque"]
@@ -158,6 +164,21 @@ class CandidateApplication(db.Model):
         String(50),
         nullable=True,
     )
+
+    # Site Joining Tracking
+    site_joining_status: Mapped[str] = mapped_column(String(50), default="NOT_JOINED", nullable=False)
+    site_joining_date: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    site_joining_updated_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    site_joining_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    site_joining_notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
@@ -175,6 +196,7 @@ class CandidateApplication(db.Model):
     created_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[created_by_id])
     reviewed_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[reviewed_by_id])
     offer_accepted_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[offer_accepted_by_id])
+    site_joining_updated_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[site_joining_updated_by_id])
     documents: Mapped[list["CandidateDocument"]] = relationship(
         "CandidateDocument",
         backref="application",
@@ -209,6 +231,7 @@ class CandidateApplication(db.Model):
         Index("ix_candidate_applications_created_at", "created_at"),
         Index("idx_candidate_user_created", "user_id", "created_at"),
         Index("idx_candidate_status", "status"),
+        Index("idx_candidate_site_joining", "site_joining_status"),
     )
 
     def __init__(

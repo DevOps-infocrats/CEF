@@ -7,6 +7,7 @@ from sqlalchemy.orm import joinedload, selectinload, raiseload
 from app.extensions import db
 from app.modules.auth.models import User
 from app.modules.candidates.models import CandidateApplication, CandidateDocument
+from app.modules.letters.models import CandidateLetter
 
 REPORT_TIMEZONE_NAME = "Asia/Kolkata"
 try:
@@ -51,10 +52,12 @@ def _base_application_query():
         .options(
             joinedload(CandidateApplication.reviewed_by).options(raiseload("*")),
             joinedload(CandidateApplication.created_by).options(raiseload("*")),
+            joinedload(CandidateApplication.site_joining_updated_by).options(raiseload("*")),
             selectinload(CandidateApplication.verification_items),
             selectinload(CandidateApplication.documents),
             selectinload(CandidateApplication.selected_districts),
             selectinload(CandidateApplication.selected_blocks),
+            selectinload(CandidateApplication.letters).joinedload(CandidateLetter.sent_by).options(raiseload("*")),
         )
     )
 

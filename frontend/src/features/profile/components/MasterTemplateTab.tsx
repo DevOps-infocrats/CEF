@@ -94,16 +94,30 @@ export const MasterTemplateTab: React.FC<MasterTemplateTabProps> = ({
   const handleDownload = async () => {
     try {
       setIsDownloading(true);
-      const res = await apiClient.get(`/letters/templates/${templateType}/download`, {
+      const res = await apiClient.get(`/letters/templates/${templateType}/download?t=${Date.now()}`, {
         responseType: 'blob',
       });
-      const blob = new Blob([res.data], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      });
+      const blob = (
+        res.data instanceof Blob
+          ? res.data
+          : new Blob([res.data], {
+              type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            })
+      );
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = template?.filename || `${templateType}_master.docx`;
+
+      let filename = template?.filename || `${templateType}_master.docx`;
+      const disposition = res.headers ? res.headers['content-disposition'] : null;
+      if (disposition) {
+        const match = disposition.match(/filename\*?=['"]?(?:UTF-\d['"]*)?([^;\r\n"']*)['"]?/i);
+        if (match && match[1]) {
+          filename = decodeURIComponent(match[1]);
+        }
+      }
+      link.download = filename;
+
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);

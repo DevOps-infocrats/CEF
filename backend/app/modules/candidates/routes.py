@@ -13,6 +13,7 @@ from app.modules.candidates.models import ApplicationRole
 from app.modules.candidates.schemas import (
     CreateCandidateApplicationSchema,
     UpdateCandidateApplicationSchema,
+    UpdateJoiningStatusSchema,
     CandidateApplicationResponseSchema,
     CandidateDocumentResponseSchema,
     CandidateVerificationItemResponseSchema,
@@ -37,6 +38,7 @@ candidates_bp = Blueprint("candidates", __name__, url_prefix="/api/v1/applicatio
 
 _create_schema = CreateCandidateApplicationSchema()
 _update_app_schema = UpdateCandidateApplicationSchema()
+_update_joining_status_schema = UpdateJoiningStatusSchema()
 _response_schema = CandidateApplicationResponseSchema()
 _list_schema = CandidateApplicationResponseSchema(many=True)
 _doc_schema = CandidateDocumentResponseSchema()
@@ -114,9 +116,17 @@ def delete_document(doc_id):
 
 
 @candidates_bp.route("/documents/<uuid:doc_id>", methods=["GET"])
+@candidates_bp.route("/documents/<uuid:doc_id>/download", methods=["GET"])
+@candidates_bp.route("/documents/<string:doc_id>", methods=["GET"])
+@candidates_bp.route("/documents/<string:doc_id>/download", methods=["GET"])
 @require_auth
 def download_document(doc_id):
     """Stream or download a candidate document securely."""
+    if isinstance(doc_id, str):
+        try:
+            doc_id = uuid.UUID(doc_id)
+        except ValueError:
+            raise ValidationError(f"Invalid document UUID: '{doc_id}'")
     doc = get_document_by_id(doc_id)
     if not doc:
         raise NotFoundError("Document not found.")
@@ -363,14 +373,31 @@ def update_application(app_id: str):
         raise NotFoundError("Application record not found.")
 
     user = g.current_user
-    can_edit = (
-        application.user_id == user.id
-        or AuthorizationEvaluator.has_required_permission(user, "candidates:write")
-        or AuthorizationEvaluator.has_required_permission(user, "candidates:create")
-        or AuthorizationEvaluator.has_required_permission(user, "candidates:submit")
-        or AuthorizationEvaluator.has_required_permission(user, "users:manage")
-        or "admin" in user.role_names
-    )
+    if application.status == "APPROVED":
+        # Approved candidate details can only be corrected by authorized HR, verifiers, or admins
+        can_edit = (
+            AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
+            or AuthorizationEvaluator.has_required_permission(user, "documents:verify")
+            or AuthorizationEvaluator.has_required_permission(user, "candidates:review")
+            or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+            or "admin" in user.role_names
+            or "reviewer" in user.role_names
+            or "officer" in user.role_names
+        )
+    else:
+        can_edit = (
+            application.user_id == user.id
+            or AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
+            or AuthorizationEvaluator.has_required_permission(user, "documents:verify")
+            or AuthorizationEvaluator.has_required_permission(user, "candidates:review")
+            or AuthorizationEvaluator.has_required_permission(user, "candidates:write")
+            or AuthorizationEvaluator.has_required_permission(user, "candidates:create")
+            or AuthorizationEvaluator.has_required_permission(user, "candidates:submit")
+            or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+            or "admin" in user.role_names
+            or "reviewer" in user.role_names
+            or "officer" in user.role_names
+        )
     if not can_edit:
         raise ForbiddenError("You are not authorized to update this application.")
 
@@ -390,6 +417,49 @@ def update_application(app_id: str):
     return api_response(
         data=_response_schema.dump(updated_app),
         message="Candidate application updated successfully.",
+        status_code=200,
+    )
+
+
+@candidates_bp.route("/<string:app_id>/joining-status", methods=["POST", "PATCH"])
+@require_auth
+def update_candidate_joining_status(app_id: str):
+    """Manually mark or update a candidate's site-joining status and date."""
+    application = get_application_by_id(app_id)
+    if not application:
+        raise NotFoundError("Application record not found.")
+
+    user = g.current_user
+    can_update = (
+        AuthorizationEvaluator.has_required_permission(user, "candidates:approve")
+        or AuthorizationEvaluator.has_required_permission(user, "documents:verify")
+        or AuthorizationEvaluator.has_required_permission(user, "candidates:review")
+        or AuthorizationEvaluator.has_required_permission(user, "users:manage")
+        or "admin" in user.role_names
+        or "reviewer" in user.role_names
+        or "officer" in user.role_names
+    )
+    if not can_update:
+        raise ForbiddenError("You are not authorized to update candidate joining status.")
+
+    payload = request.get_json(silent=True) or {}
+    validated_data = _update_joining_status_schema.load(payload)
+
+    ip_address, user_agent = _get_client_metadata()
+
+    updated_app = CandidateService.update_joining_status(
+        application=application,
+        status=validated_data["status"],
+        joining_date=validated_data.get("joining_date"),
+        notes=validated_data.get("notes"),
+        user=user,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+    return api_response(
+        data=_response_schema.dump(updated_app),
+        message=f"Site joining status updated to '{updated_app.site_joining_status}'.",
         status_code=200,
     )
 

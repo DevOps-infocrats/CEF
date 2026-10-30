@@ -90,6 +90,21 @@ export interface VerificationApplication {
   current_salary: string | number;
   asking_salary: string | number;
   negotiated_salary?: string | number | null;
+  joining_date?: string | null;
+
+  // Offer Letter Tracking
+  offer_letter_status?: string | null;
+  offer_letter_released_at?: string | null;
+  offer_letter_released_by_name?: string | null;
+
+  // Site Joining Tracking
+  site_joining_status?: 'NOT_JOINED' | 'PENDING' | 'JOINED';
+  site_joining_date?: string | null;
+  site_joining_updated_by_id?: string | null;
+  site_joining_updated_by_name?: string | null;
+  site_joining_updated_at?: string | null;
+  site_joining_notes?: string | null;
+  enrollment_completed?: boolean;
 
   // Documents
   documents?: CandidateDocument[];
